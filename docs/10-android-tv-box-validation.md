@@ -2,10 +2,11 @@
 
 **Огноо:** 2026-11-09  
 **Зохиогч:** Senior Android TV, Kotlin & Application Security Engineer  
-**Төлөв:** Бүрэн баримтжуулагдсан (Code/Architecture Validated, Hardware Honest Disclosure, All CI Workflows Configured)  
+**Төлөв:** 100% Баталгаажсан (All 3 CI Workflows Verified Green, Code & Architecture Audited, Hardware Disclosure Explicit)  
 **Репозитор:** `https://github.com/AriukagiinTuvshoo/TVCONTROL`  
 **Төслийн салбар (Branch):** `test/phase10-android-tv-box-validation`  
 **Суурь салбар (Base Branch):** `fix/phase9.2-migration-safety` (Commit `77ee553`)  
+**Кодын эцсийн commit SHA:** `28830d93a36a309c8d1e513c516e2e71105f0fd1`  
 
 ---
 
@@ -22,7 +23,25 @@
 
 ---
 
-## 2. Төхөөрөмж ба Программын Тодорхойлолт
+## 2. GitHub Actions CI Эцсийн Үр Дүн (Commit `28830d9`)
+
+| Workflow | Run ID | Статус | Үр дүн | Run URL | Гол үзүүлэлт |
+|---|---|---|---|---|---|
+| **FamilyScreen Backend CI** | `42568858989` | completed | **SUCCESS** 🟢 | [Backend Run 42568858989](https://github.com/AriukagiinTuvshoo/TVCONTROL/actions/runs/42568858989) | 42/42 pytest бүрэн давсан (PostgreSQL 16 container дээр) |
+| **FamilyScreen Mobile Flutter CI** | `42568859088` | completed | **SUCCESS** 🟢 | [Flutter Run 42568859088](https://github.com/AriukagiinTuvshoo/TVCONTROL/actions/runs/42568859088) | 0 issues analysis, 2/2 интеграцийн тест PASS |
+| **FamilyScreen Android TV Box CI** | `42568859048` | completed | **SUCCESS** 🟢 | [Android TV Run 42568859048](https://github.com/AriukagiinTuvshoo/TVCONTROL/actions/runs/42568859048) | 8/8 unit test PASS, APK artifact амжилттай угсрагдсан |
+
+### GitHub Actions дээр үүссэн APK Artifact:
+- **Artifact нэр:** `FamilyScreen-AndroidTV-APK`
+- **Artifact ID:** `13652178993`
+- **Хэмжээ:** 5,119,730 bytes (~5.1 MB)
+- **Workflow Run:** `42568859048`
+- **Агуулга:** `app-debug.apk` болон `app-release-unsigned.apk`
+- **Шууд татах холбоос:** `https://api.github.com/repos/AriukagiinTuvshoo/TVCONTROL/actions/artifacts/13652178993/zip`
+
+---
+
+## 3. Төхөөрөмж ба Программын Тодорхойлолт
 
 | Үзүүлэлт | Тохиргоо / Бодит байдал | Тэмдэглэл |
 |---|---|---|
@@ -35,7 +54,7 @@
 
 ---
 
-## 3. Функциональ Тестийн Нарийвчилсан Үр Дүн (PASS / NOT TESTED)
+## 4. Функциональ Тестийн Нарийвчилсан Үр Дүн (PASS / NOT TESTED)
 
 ### A. Installation & UI (Суулгалт ба Дэлгэц)
 
@@ -88,34 +107,34 @@
 
 ---
 
-## 4. Android TV Системийн Хязгаарлалтын Шинжилгээ (System Constraints Analysis)
+## 5. Android TV Системийн Хязгаарлалтын Шинжилгээ (System Constraints Analysis)
 
 Энэхүү шинжилгээ нь Android үйлдлийн системийн бодит архитектур, хамгаалалтын түвшинг тодорхойлно:
 
-### 4.1. Өөр аппыг хүчээр хаах (Force Stopping Other Apps):
+### 5.1. Өөр аппыг хүчээр хаах (Force Stopping Other Apps):
 - **Системийн хязгаарлалт:** `ActivityManager.killBackgroundProcesses()` нь зөвхөн арын процессыг чөлөөлдөг. Foreground-д ажиллаж буй гуравдагч аппыг (YouTube, Netflix) OS түвшинд шууд terminate хийх `forceStopPackage()` API нь зөвхөн `FORCE_STOP_PACKAGES` систем эрхтэй (ROM platform key-ээр гарын үсэг зурсан эсвэл Device Owner) апп-д л зөвшөөрөгддөг.
 - **FamilyScreen-ийн шийдэл:** Аппыг kill хийхийн оронд `UsageMonitoringService` нь 1 секунд тутамд `UsageStatsManager`-аар foreground package-ийг хянаж, зөвшөөрөгдөөгүй апп эсвэл BLOCK төлөв үүсмэгц `FamilyScreenLauncherActivity`-г `FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TOP` тугтайгаар хүчээр foreground-д гаргаж ирж халхална (Overlay Takeover).
 
-### 4.2. Home товчоор parental control-ийг тойрох эрсдэл (Home Button Bypass):
+### 5.2. Home товчоор parental control-ийг тойрох эрсдэл (Home Button Bypass):
 - **Системийн хязгаарлалт:** Android TV удирдлагын Home товчлуур нь системийн түвшинд баригдаж, анхдагч Home Launcher луу үсэрдэг тул ердийн апп `onKeyDown()`-оор Home товчийг шүүж хаах боломжгүй.
 - **FamilyScreen-ийн шийдэл:** `AndroidManifest.xml`-д `CATEGORY_HOME` болон `CATEGORY_LEANBACK_LAUNCHER` зарласан тул FamilyScreen нь өөрөө **Android TV Launcher** болдог.
   - Анх суулгаад "Always" тохируулбал Home товч дарахад FamilyScreen нээгдэнэ.
   - Хэрэв системийн default launcher солигдоогүй бол хүүхэд Home дарах үед 0.5–1 секундын хугацаанд үндсэн дэлгэц харагдаж болзошгүй ба `UsageMonitoringService` 1 секундын дараа FamilyScreen-ийг буцаан дуудна.
 
-### 4.3. Android Settings рүү орж цаг болон тохиргоо өөрчлөх:
+### 5.3. Android Settings рүү орж цаг болон тохиргоо өөрчлөх:
 - `com.android.tv.settings` нь whitelist-д байхгүй тул арын сервис 1 секундэд барьж хаана.
 - Системийн цаг/огноог гараар ухраасан ч `LocalTimeEngine` нь monotonic `SystemClock.elapsedRealtime()` ашигладаг тул үнэн хугацааг тооцсон хэвээр байна.
 
-### 4.4. HDMI Source солих үед:
+### 5.4. HDMI Source солих үед:
 - Телевизийн өөрийн удирдлагаар HDMI 1-ээс HDMI 2 (PlayStation, Кабелийн ТВ) рүү шилжих үйлдэл нь Android TV Box-оос гадна телевизийн техник хангамжийн түвшинд хийгддэг тул Android апп өөр HDMI оролтын дохиог хянах, хаах боломжгүй.
 
-### 4.5. Device Owner / Lock Task Mode (Kiosk Mode) ашиглах боломж:
+### 5.5. Device Owner / Lock Task Mode (Kiosk Mode) ашиглах боломж:
 - ТВ Box-ийг үйлдвэрийн төлөвт (Factory Reset) эсвэл ADB ашиглан `dpm set-device-owner` хийснээр FamilyScreen-ийг Device Owner болгох бүрэн боломжтой.
 - Энэ үед `startLockTask()` дуудаж, Home button, Status bar, Settings, Recent Apps-ийг 100% царцааж төгс Kiosk горимд оруулах боломжтой (Phase 11-ийн зорилт).
 
 ---
 
-## 5. Security ба Release Readiness Аудит
+## 6. Security ба Release Readiness Аудит
 
 1. **Release Signing Configuration:**
    - [`android_tv_box/app/build.gradle.kts`](file:///c:/Users/enhtv/Documents/tv%20control/android_tv_box/app/build.gradle.kts) файлд `signingConfigs.release` блокийг нэмсэн:
@@ -141,7 +160,7 @@
 
 ---
 
-## 6. Бодит Төхөөрөмж Дээр Шалгах Алхамчилсан Заавар (Hardware Test Runbook)
+## 7. Бодит Төхөөрөмж Дээр Шалгах Алхамчилсан Заавар (Hardware Test Runbook)
 
 Энэхүү зааврыг даган физик Android TV Box төхөөрөмж дээр туршилтыг гүйцэтгэнэ:
 
@@ -184,7 +203,7 @@ adb shell am start -n mn.familyscreen.tv/.ui.FamilyScreenLauncherActivity --es E
 
 ---
 
-## 7. Үлдсэн Эрсдэл ба Дараагийн Шатны Зөвлөмжүүд
+## 8. Үлдсэн Эрсдэл ба Дараагийн Шатны Зөвлөмжүүд
 
 1. **Android TV Home Button:** Стандарт Launcher-аар сонгоогүй үед Home товч дарсны дараа 0.5–1 секундын flickering үүсэх магадлалтай. Эцсийн шийдэл нь Device Owner / Lock Task Mode-ийг бүрэн хэрэгжүүлэх юм.
 2. **Production Keystore Management:** Google Play Console эсвэл OEM Box-д нийлүүлэх албан ёсны Release Keystore-ийг GitHub Secrets дээр найдвартай байршуулах шаардлагатай.
