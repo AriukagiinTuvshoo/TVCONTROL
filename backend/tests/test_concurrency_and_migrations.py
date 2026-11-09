@@ -26,7 +26,18 @@ from sqlalchemy.orm import sessionmaker
 import app.security as sec
 from app.database import Base, get_db
 from app.main import app
-from app.migrations import Migration, MIGRATIONS, get_applied_migrations, init_db, rollback_migration, run_migrations
+from app.migrations import (
+    MIGRATION_ADVISORY_LOCK_ID,
+    Migration,
+    MigrationLockTimeoutError,
+    MIGRATIONS,
+    _sqlite_migration_lock,
+    get_applied_migrations,
+    init_db,
+    migration_lock,
+    rollback_migration,
+    run_migrations,
+)
 from app.models import Family, FamilyMember, User
 
 
@@ -541,3 +552,313 @@ def test_pin_update_owner_vs_member_authorization(client: TestClient):
     )
     assert owner_res.status_code == 200
     assert "амжилттай" in owner_res.json()["message"]
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Concurrent Database Initialization Race Condition (Advisory Locking)
+# ---------------------------------------------------------------------------
+def test_concurrent_database_initialization_race_condition(tmp_path):
+    """Launch multiple concurrent threads executing init_db(engine) simultaneously.
+
+    Asserts that all threads succeed without deadlocks, users table exists,
+    schema_migrations contains version 001 exactly once, and zero errors occur.
+    """
+    db_file = tmp_path / "concurrent_init.db"
+    test_engine = create_engine(
+        f"sqlite:///{db_file}",
+        connect_args={"timeout": 30.0},
+        future=True,
+    )
+
+    def _init_worker():
+        return init_db(test_engine)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(_init_worker) for _ in range(4)]
+        results = [f.result() for f in futures]
+
+    # Verify that all threads completed without exceptions
+    assert len(results) == 4
+
+    with test_engine.connect() as conn:
+        # Check that schema_migrations has version 001 exactly once
+        applied = get_applied_migrations(conn)
+        assert applied == ["001_add_supabase_sub_to_users"]
+
+        # Check that core tables and columns exist
+        tables = [r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
+        assert "users" in tables
+        assert "families" in tables
+        assert "devices" in tables
+        assert "schema_migrations" in tables
+
+        cols = [c[1] for c in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+        assert "supabase_sub" in cols
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Existing Data Preservation Across Migrations
+# ---------------------------------------------------------------------------
+def test_existing_data_preservation_across_migrations(tmp_path):
+    """Seed full legacy schema (users, families, members, devices, policies) without supabase_sub.
+
+    Execute init_db(engine) and verify every record, foreign key, and policy
+    attribute is 100% preserved without any data loss.
+    """
+    db_file = tmp_path / "preserve_data.db"
+    test_engine = create_engine(f"sqlite:///{db_file}")
+
+    with test_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+            CREATE TABLE users (
+                id VARCHAR(36) PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                phone VARCHAR(32),
+                password_hash VARCHAR(255) NOT NULL,
+                full_name VARCHAR(120) NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            CREATE TABLE families (
+                id VARCHAR(36) PRIMARY KEY,
+                name VARCHAR(120) NOT NULL,
+                pin_hash VARCHAR(255),
+                pin_configured BOOLEAN NOT NULL DEFAULT 0,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            CREATE TABLE family_members (
+                id VARCHAR(36) PRIMARY KEY,
+                family_id VARCHAR(36) NOT NULL REFERENCES families(id),
+                user_id VARCHAR(36) NOT NULL REFERENCES users(id),
+                role VARCHAR(32) NOT NULL DEFAULT 'MEMBER',
+                created_at TIMESTAMP NOT NULL
+            )
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            CREATE TABLE devices (
+                id VARCHAR(36) PRIMARY KEY,
+                device_name VARCHAR(120) NOT NULL,
+                family_id VARCHAR(36) NOT NULL REFERENCES families(id),
+                device_type VARCHAR(32) NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            CREATE TABLE policies (
+                id VARCHAR(36) PRIMARY KEY,
+                device_id VARCHAR(36) NOT NULL REFERENCES devices(id),
+                daily_limit_minutes INTEGER NOT NULL,
+                bed_time VARCHAR(5) NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            INSERT INTO users (id, email, password_hash, full_name, created_at, updated_at)
+            VALUES ('u-pres-1', 'parent@familyscreen.mn', 'hash999', 'Preserve Parent', '2026-01-01', '2026-01-01')
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            INSERT INTO families (id, name, pin_hash, pin_configured, created_at, updated_at)
+            VALUES ('fam-pres-1', 'Preserve Family', 'hash_pin_123', 1, '2026-01-01', '2026-01-01')
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            INSERT INTO family_members (id, family_id, user_id, role, created_at)
+            VALUES ('mem-pres-1', 'fam-pres-1', 'u-pres-1', 'OWNER', '2026-01-01')
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            INSERT INTO devices (id, device_name, family_id, device_type, created_at, updated_at)
+            VALUES ('dev-pres-1', 'Living Room Android TV', 'fam-pres-1', 'ANDROID_TV', '2026-01-01', '2026-01-01')
+            """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            INSERT INTO policies (id, device_id, daily_limit_minutes, bed_time, created_at, updated_at)
+            VALUES ('pol-pres-1', 'dev-pres-1', 120, '21:00', '2026-01-01', '2026-01-01')
+            """
+            )
+        )
+
+    # Apply database migrations on top of existing data
+    applied = init_db(test_engine)
+    assert "001_add_supabase_sub_to_users" in applied
+
+    # Verify 100% data preservation
+    with test_engine.connect() as conn:
+        user_row = conn.execute(
+            text("SELECT id, email, full_name, supabase_sub FROM users WHERE id='u-pres-1'")
+        ).fetchone()
+        assert user_row is not None
+        assert user_row[0] == "u-pres-1"
+        assert user_row[1] == "parent@familyscreen.mn"
+        assert user_row[2] == "Preserve Parent"
+        assert user_row[3] is None  # supabase_sub is NULL for legacy user
+
+        fam_row = conn.execute(text("SELECT id, name, pin_configured FROM families WHERE id='fam-pres-1'")).fetchone()
+        assert fam_row is not None
+        assert fam_row[1] == "Preserve Family"
+        assert fam_row[2] == 1
+
+        mem_row = conn.execute(
+            text("SELECT id, family_id, user_id, role FROM family_members WHERE id='mem-pres-1'")
+        ).fetchone()
+        assert mem_row is not None
+        assert mem_row[3] == "OWNER"
+
+        dev_row = conn.execute(
+            text("SELECT id, device_name, family_id FROM devices WHERE id='dev-pres-1'")
+        ).fetchone()
+        assert dev_row is not None
+        assert dev_row[1] == "Living Room Android TV"
+
+        pol_row = conn.execute(
+            text("SELECT id, device_id, daily_limit_minutes, bed_time FROM policies WHERE id='pol-pres-1'")
+        ).fetchone()
+        assert pol_row is not None
+        assert pol_row[2] == 120
+        assert pol_row[3] == "21:00"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Migration Lock Timeout Handling
+# ---------------------------------------------------------------------------
+def test_migration_lock_timeout_handling(tmp_path):
+    """Verify that attempting to acquire a locked migration lock times out cleanly
+
+    and raises MigrationLockTimeoutError instead of hanging indefinitely.
+    """
+    import threading
+
+    db_file = tmp_path / "lock_timeout.db"
+    test_engine = create_engine(f"sqlite:///{db_file}")
+
+    holder_acquired = threading.Event()
+    release_holder = threading.Event()
+
+    def _lock_holder():
+        with _sqlite_migration_lock:
+            holder_acquired.set()
+            release_holder.wait(timeout=5.0)
+
+    holder_thread = threading.Thread(target=_lock_holder)
+    holder_thread.start()
+    assert holder_acquired.wait(timeout=3.0)
+
+    try:
+        with test_engine.connect() as conn:
+            # Competing attempt should time out after 0.2s and raise MigrationLockTimeoutError
+            with pytest.raises(MigrationLockTimeoutError, match="Timed out.*waiting for.*migration lock"):
+                with migration_lock(conn, timeout_seconds=0.2):
+                    pass
+    finally:
+        release_holder.set()
+        holder_thread.join(timeout=3.0)
+
+    # After holder finishes, acquiring lock should succeed cleanly
+    with test_engine.connect() as conn:
+        with migration_lock(conn, timeout_seconds=2.0):
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Test 9: PostgreSQL Advisory Lock and Concurrency (Container Integration)
+# ---------------------------------------------------------------------------
+def test_postgresql_advisory_lock_and_concurrent_migrations():
+    """Verify PostgreSQL-specific session advisory locking (pg_try_advisory_lock).
+
+    Only executes when TEST_POSTGRES_URL environment variable is provided
+    (e.g., in GitHub Actions with a PostgreSQL service container).
+    """
+    pg_url = os.getenv("TEST_POSTGRES_URL")
+    if not pg_url:
+        pytest.skip("TEST_POSTGRES_URL environment variable not set. Skipping live PostgreSQL test.")
+
+    pg_engine = create_engine(pg_url, pool_pre_ping=True)
+
+    # 1. Test low-level advisory lock mutual exclusion across separate connections
+    with pg_engine.connect() as conn1:
+        # Acquire lock on conn1
+        locked1 = conn1.execute(
+            text("SELECT pg_try_advisory_lock(:lock_id)"),
+            {"lock_id": MIGRATION_ADVISORY_LOCK_ID},
+        ).scalar()
+        assert locked1 is True
+
+        try:
+            # Attempt to acquire same lock on conn2 -> should return False immediately
+            with pg_engine.connect() as conn2:
+                locked2 = conn2.execute(
+                    text("SELECT pg_try_advisory_lock(:lock_id)"),
+                    {"lock_id": MIGRATION_ADVISORY_LOCK_ID},
+                ).scalar()
+                assert locked2 is False
+
+                # migration_lock with short timeout must raise MigrationLockTimeoutError
+                with pytest.raises(MigrationLockTimeoutError):
+                    with migration_lock(conn2, timeout_seconds=0.3):
+                        pass
+        finally:
+            # Release lock on conn1
+            unlocked = conn1.execute(
+                text("SELECT pg_advisory_unlock(:lock_id)"),
+                {"lock_id": MIGRATION_ADVISORY_LOCK_ID},
+            ).scalar()
+            assert unlocked is True
+
+    # 2. Test concurrent multi-threaded init_db on live PostgreSQL
+    def _pg_worker():
+        return init_db(pg_engine)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(_pg_worker) for _ in range(4)]
+        results = [f.result() for f in futures]
+
+    assert len(results) == 4
+    with pg_engine.connect() as conn:
+        applied = get_applied_migrations(conn)
+        assert "001_add_supabase_sub_to_users" in applied
+
