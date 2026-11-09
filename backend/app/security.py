@@ -1,4 +1,4 @@
-"""Security utilities: password hashing, PIN hashing, rate-limiting, HMAC tokens, and Supabase JWT verification."""
+"""Security utilities: password hashing, PIN hashing, rate-limiting, HMAC tokens, and Supabase JWKS/JWT verification."""
 
 from __future__ import annotations
 
@@ -8,15 +8,16 @@ import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, List, Optional
 
+import httpx
 import jwt
+from jwt import PyJWKSet
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
 SECRET_KEY = os.getenv("FAMILYSCREEN_SECRET_KEY", "familyscreen-dev-secret-key-change-in-prod")
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", None)
 
 # Enforce strict secret key validation in production to prevent deployment with default credentials
 if ENVIRONMENT == "production":
@@ -25,6 +26,23 @@ if ENVIRONMENT == "production":
             "CRITICAL SECURITY CONFIGURATION ERROR: FAMILYSCREEN_SECRET_KEY must be set to a "
             "cryptographically strong secret (minimum 32 characters) in production environment!"
         )
+
+# Supabase Auth Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_JWKS_URL = os.getenv(
+    "SUPABASE_JWKS_URL",
+    f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else "",
+)
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", None)
+SUPABASE_PUBLIC_KEY = os.getenv("SUPABASE_PUBLIC_KEY", None)
+SUPABASE_JWT_AUDIENCE = os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated")
+SUPABASE_JWT_ISSUER = os.getenv(
+    "SUPABASE_JWT_ISSUER",
+    f"{SUPABASE_URL}/auth/v1" if SUPABASE_URL else None,
+)
+
+raw_allowed_algs = os.getenv("SUPABASE_ALLOWED_ALGORITHMS", "RS256,HS256")
+ALLOWED_SUPABASE_ALGORITHMS = [alg.strip() for alg in raw_allowed_algs.split(",") if alg.strip()]
 
 PBKDF2_ITERATIONS = 120_000
 MAX_PIN_ATTEMPTS = 5
@@ -43,6 +61,8 @@ class AuthPrincipal:
     family_id: str
     issued_at: int
     auth_provider: str = "local"
+    email: Optional[str] = None
+    full_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +72,96 @@ class DevicePrincipal:
     device_id: str
     family_id: str
     issued_at: int
+
+
+class SupabaseJwksManager:
+    """Manages JWKS key caching and dynamic key rotation for Supabase RS256 JWTs."""
+
+    def __init__(self, jwks_url: Optional[str] = None, cache_ttl_seconds: int = 600):
+        self.jwks_url = jwks_url
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self._cached_jwk_set: Optional[PyJWKSet] = None
+        self._cache_expires_at: float = 0.0
+        self._test_jwk_set: Optional[PyJWKSet] = None
+
+    def set_test_jwks(self, jwks_dict: dict) -> None:
+        """Inject in-memory test JWKS for unit tests without network calls."""
+        self._test_jwk_set = PyJWKSet.from_dict(jwks_dict)
+
+    def clear_test_jwks(self) -> None:
+        self._test_jwk_set = None
+
+    def get_signing_key(self, kid: Optional[str]) -> Any:
+        # 1. Check in-memory test JWKS first
+        if self._test_jwk_set is not None:
+            if not kid:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="JWT header дотор kid талбар байхгүй байна.",
+                )
+            try:
+                return self._test_jwk_set[kid].key
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"JWKS дээрээс түлхүүр ({kid}) олдсонгүй.",
+                ) from exc
+
+        # 2. Check live JWKS URL
+        if not self.jwks_url:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Supabase JWKS тохируулагдаагүй байна.",
+            )
+
+        now = datetime.now(timezone.utc).timestamp()
+        if self._cached_jwk_set is None or now > self._cache_expires_at:
+            self._refresh_cache()
+
+        if self._cached_jwk_set is not None and kid:
+            try:
+                return self._cached_jwk_set[kid].key
+            except Exception:
+                # Key rotation: if kid not in cache, force one immediate refresh
+                self._refresh_cache()
+                try:
+                    return self._cached_jwk_set[kid].key
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=f"Шинэчлэгдсэн JWKS-ээс түлхүүр ({kid}) олдсонгүй.",
+                    ) from exc
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Supabase нийтийн түлхүүр (public key) олдсонгүй.",
+        )
+
+    def _refresh_cache(self) -> None:
+        if not self.jwks_url:
+            return
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                res = client.get(self.jwks_url)
+                if res.status_code == 200:
+                    data = res.json()
+                    self._cached_jwk_set = PyJWKSet.from_dict(data)
+                    self._cache_expires_at = datetime.now(timezone.utc).timestamp() + self.cache_ttl_seconds
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=f"Supabase JWKS endpoint HTTP {res.status_code} алдаа буцаалаа.",
+                    )
+        except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise exc
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Supabase JWKS татахад сүлжээний алдаа гарлаа: {str(exc)}",
+            ) from exc
+
+
+jwks_manager = SupabaseJwksManager(jwks_url=SUPABASE_JWKS_URL if SUPABASE_JWKS_URL else None)
 
 
 def hash_secret(secret_value: str) -> str:
@@ -156,49 +266,105 @@ def verify_device_token(token: str) -> DevicePrincipal:
 
 
 def verify_supabase_jwt(token: str) -> AuthPrincipal:
-    """Validate Supabase Auth RS256/HS256 JWT token."""
-    secret = SUPABASE_JWT_SECRET or SECRET_KEY
+    """Validate Supabase Auth RS256/HS256 JWT token with strict JWKS, claims, and algorithm whitelisting."""
     try:
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256", "RS256"],
-            options={"verify_aud": False},
+        unverified_header = jwt.get_unverified_header(token)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"JWT header уншихад алдаа гарлаа: {str(exc)}",
+        ) from exc
+
+    alg = unverified_header.get("alg")
+    kid = unverified_header.get("kid")
+
+    # Algorithm Confusion Mitigation: strictly reject any algorithm not explicitly allowed by server
+    if not alg or alg not in ALLOWED_SUPABASE_ALGORITHMS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Зөвшөөрөгдөөгүй JWT алгоритм: {alg}. Зөвхөн {ALLOWED_SUPABASE_ALGORITHMS} зөвшөөрөгдөнө.",
         )
-        user_id = payload.get("sub")
-        if not user_id:
+
+    decode_kwargs: dict[str, Any] = {
+        "options": {"verify_aud": True, "require": ["exp", "sub"]},
+        "audience": SUPABASE_JWT_AUDIENCE,
+    }
+    if SUPABASE_JWT_ISSUER:
+        decode_kwargs["issuer"] = SUPABASE_JWT_ISSUER
+
+    key_for_decoding: Any = None
+
+    if alg == "RS256":
+        decode_kwargs["algorithms"] = ["RS256"]
+        if SUPABASE_PUBLIC_KEY:
+            key_for_decoding = SUPABASE_PUBLIC_KEY
+        else:
+            key_for_decoding = jwks_manager.get_signing_key(kid)
+
+    elif alg == "HS256":
+        decode_kwargs["algorithms"] = ["HS256"]
+        if not SUPABASE_JWT_SECRET:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Supabase JWT токены sub талбар олдсонгүй.",
+                detail="Сервер дээр Supabase HS256 JWT secret тохируулагдаагүй байна.",
             )
-        family_id = payload.get("family_id") or payload.get("app_metadata", {}).get("family_id") or f"fam-{user_id}"
-        issued_at = payload.get("iat", int(datetime.now(timezone.utc).timestamp()))
-        return AuthPrincipal(
-            user_id=str(user_id),
-            family_id=str(family_id),
-            issued_at=int(issued_at),
-            auth_provider="supabase",
+        key_for_decoding = SUPABASE_JWT_SECRET
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Дэмжигдээгүй алгоритм: {alg}",
         )
+
+    try:
+        payload = jwt.decode(token, key_for_decoding, **decode_kwargs)
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Supabase JWT токены хугацаа дууссан байна (Expired).",
+        ) from exc
+    except jwt.InvalidIssuerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Supabase JWT токены issuer (iss) буруу эсвэл өөр project-ийн токен байна.",
+        ) from exc
+    except jwt.InvalidAudienceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Supabase JWT токены audience (aud) буруу байна.",
+        ) from exc
     except jwt.PyJWTError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Supabase JWT токен хүчингүй байна: {str(exc)}",
         ) from exc
 
-
-def verify_access_token(token: str) -> AuthPrincipal:
-    """Verify access token supporting both standard HMAC tokens and Supabase JWTs."""
-    if not token:
+    user_id = payload.get("sub")
+    if not user_id or not str(user_id).strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Нэвтрэх эрхийн токен буруу эсвэл байхгүй байна.",
+            detail="Supabase JWT токены sub (user ID) талбар олдсонгүй.",
         )
 
-    # 1. Supabase JWT standard format (header.payload.signature)
-    if token.count(".") == 2:
-        return verify_supabase_jwt(token)
+    email = payload.get("email")
+    user_meta = payload.get("user_metadata", {}) or {}
+    app_meta = payload.get("app_metadata", {}) or {}
+    full_name = user_meta.get("full_name") or user_meta.get("name")
+    family_id = payload.get("family_id") or app_meta.get("family_id") or f"fam-{user_id}"
+    issued_at = payload.get("iat", int(datetime.now(timezone.utc).timestamp()))
 
-    # 2. FamilyScreen High-Performance HMAC Token
+    return AuthPrincipal(
+        user_id=str(user_id),
+        family_id=str(family_id),
+        issued_at=int(issued_at),
+        auth_provider="supabase",
+        email=str(email) if email else None,
+        full_name=str(full_name) if full_name else None,
+    )
+
+
+def verify_hmac_access_token(token: str) -> AuthPrincipal:
+    """Verify standard FamilyScreen signed HMAC token."""
     if "." not in token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -241,6 +407,28 @@ def verify_access_token(token: str) -> AuthPrincipal:
         )
 
     return AuthPrincipal(user_id=user_id, family_id=family_id, issued_at=issued_at, auth_provider="local")
+
+
+def verify_access_token(token: str) -> AuthPrincipal:
+    """Verify access token supporting both standard HMAC tokens and Supabase JWTs."""
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Нэвтрэх эрхийн токен буруу эсвэл байхгүй байна.",
+        )
+
+    # 1. Supabase standard JWT format (header.payload.signature)
+    if token.count(".") == 2:
+        return verify_supabase_jwt(token)
+
+    # 2. FamilyScreen High-Performance HMAC Token (payload.signature)
+    if token.count(".") == 1:
+        return verify_hmac_access_token(token)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Танигдахгүй токены формат байна.",
+    )
 
 
 def get_current_principal(
