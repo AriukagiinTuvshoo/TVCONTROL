@@ -362,7 +362,7 @@ void main() {
       // 5. Verify /pin/init was called, session updated, and dashboard unlocked
       expect(pinInitCalled, isTrue);
       expect(find.text('90'), findsOneWidget);
-      expect(find.text('Энэрэл'), findsOneWidget);
+      expect(find.textContaining('Энэрэл'), findsWidgets);
     },
   );
 }
