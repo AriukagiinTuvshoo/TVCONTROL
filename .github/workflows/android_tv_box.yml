@@ -26,19 +26,23 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Run Android TV Unit Tests
+      - name: Grant Execute Permission to Gradle Wrapper
         run: |
           cd android_tv_box
           chmod +x gradlew
-          ./gradlew testReleaseUnitTest --info
 
-      - name: Build Android TV Release APK
+      - name: Run Android TV Unit Tests
         run: |
           cd android_tv_box
-          ./gradlew assembleRelease --stacktrace
+          ./gradlew testReleaseUnitTest --info --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Build Android TV Debug & Release APKs
+        run: |
+          cd android_tv_box
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Upload Android TV APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FamilyScreen-TvBox-Release-APK
-          path: android_tv_box/app/build/outputs/apk/release/*.apk
+          name: FamilyScreen-AndroidTV-APK
+          path: android_tv_box/app/build/outputs/apk/**/*.apk
