@@ -14,6 +14,11 @@ void main() {
   testWidgets(
     'Parent login, child dashboard load, and remote +15m override flow',
     (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       int overrideMinutes = 0;
 
       final mockHttp = MockClient((http.Request request) async {
@@ -185,6 +190,11 @@ void main() {
   testWidgets(
     'New family onboarding: unconfigured PIN routes to PinSetupScreen, initializes PIN, and unlocks dashboard',
     (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       bool pinInitCalled = false;
 
       final mockHttp = MockClient((http.Request request) async {
@@ -337,6 +347,7 @@ void main() {
       // 3. Test validation: mismatching PINs
       await tester.enterText(find.byKey(const Key('pin_setup_input')), '5678');
       await tester.enterText(find.byKey(const Key('pin_setup_confirm_input')), '9999');
+      await tester.ensureVisible(find.byKey(const Key('pin_setup_submit_button')));
       await tester.tap(find.byKey(const Key('pin_setup_submit_button')));
       await tester.pumpAndSettle();
       expect(find.text('Оруулсан PIN кодууд хоорондоо таарахгүй байна.'), findsOneWidget);
@@ -344,6 +355,7 @@ void main() {
 
       // 4. Test validation: matching valid PIN
       await tester.enterText(find.byKey(const Key('pin_setup_confirm_input')), '5678');
+      await tester.ensureVisible(find.byKey(const Key('pin_setup_submit_button')));
       await tester.tap(find.byKey(const Key('pin_setup_submit_button')));
       await tester.pumpAndSettle();
 

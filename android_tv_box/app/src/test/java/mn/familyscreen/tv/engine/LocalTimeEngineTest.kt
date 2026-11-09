@@ -165,7 +165,7 @@ class LocalTimeEngineTest {
         )
 
         for (i in 1..5) {
-            assertFalse(engine.verifyPinAndGrantOverride("0000", 15, 10_000L))
+            assertFalse(engine.verifyPinAndGrantOverride("0000", 15, 1_000L))
         }
         // Lockout timestamp is set in trusted UTC
         val lockoutUtcMs = engine.getPinLockedUntilUtcMs()
