@@ -910,7 +910,7 @@ class _ParentHomeShellState extends State<ParentHomeShell> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: ageGroup,
+                initialValue: ageGroup,
                 decoration: const InputDecoration(
                   labelText: 'Насны бүлэг',
                   border: OutlineInputBorder(),
@@ -927,7 +927,7 @@ class _ParentHomeShellState extends State<ParentHomeShell> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
-                value: limitMin,
+                initialValue: limitMin,
                 decoration: const InputDecoration(
                   labelText: 'Өдрийн лимит',
                   border: OutlineInputBorder(),
@@ -1395,7 +1395,7 @@ class _ParentHomeShellState extends State<ParentHomeShell> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: badgeColor.withOpacity(0.12),
+                        color: badgeColor.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(

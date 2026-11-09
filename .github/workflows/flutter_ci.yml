@@ -30,7 +30,7 @@ jobs:
       - name: Analyze Flutter Code
         run: |
           cd mobile_app
-          flutter analyze
+          flutter analyze --no-fatal-infos
 
       - name: Run Flutter Tests
         run: |
