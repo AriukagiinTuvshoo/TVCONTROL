@@ -90,8 +90,19 @@ from .time_engine import (
     resolve_local_datetime,
 )
 
-# Safely initialize database schema and migrations
-init_db(engine)
+# Safely initialize database schema and migrations under advisory lock.
+# In production, migrations can optionally be executed out-of-band (e.g. via CLI or Kubernetes initContainer)
+# by setting FAMILYSCREEN_SKIP_STARTUP_MIGRATIONS=true.
+SKIP_STARTUP_MIGRATIONS = os.getenv("FAMILYSCREEN_SKIP_STARTUP_MIGRATIONS", "false").lower() in ("true", "1")
+if not SKIP_STARTUP_MIGRATIONS:
+    try:
+        init_db(engine)
+    except Exception as exc:
+        import logging
+        logging.getLogger("familyscreen.startup").critical(
+            "CRITICAL STARTUP ERROR: Database initialization / migration failed: %s", exc, exc_info=True
+        )
+        raise RuntimeError(f"Database initialization failed: {exc}") from exc
 
 app = FastAPI(
     title="FamilyScreen Cloud API",

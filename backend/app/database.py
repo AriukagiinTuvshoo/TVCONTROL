@@ -27,6 +27,16 @@ elif DATABASE_URL.startswith("postgresql"):
     engine_kwargs["max_overflow"] = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     engine_kwargs["pool_pre_ping"] = True
     engine_kwargs["pool_recycle"] = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    engine_kwargs["pool_timeout"] = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+
+ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
+if ENVIRONMENT == "production" and DATABASE_URL.startswith("sqlite"):
+    import logging
+    logging.getLogger("familyscreen.database").warning(
+        "CRITICAL ARCHITECTURAL WARNING: SQLite is being used with ENVIRONMENT=production. "
+        "SQLite does not support horizontal scaling, multi-instance concurrency, or distributed advisory locks. "
+        "A managed PostgreSQL database (e.g. Supabase, Cloud SQL, Neon) is required for production."
+    )
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 
