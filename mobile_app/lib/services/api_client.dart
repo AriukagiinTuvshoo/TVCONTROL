@@ -144,6 +144,33 @@ class FamilyScreenApiClient {
     }
   }
 
+  /// Connects with Supabase Auth session JWT and initializes backend family profile.
+  Future<AuthSessionData> loginWithSupabaseToken(String supabaseJwt) async {
+    try {
+      final response = await _http.get(
+        _uri('/api/v1/auth/me'),
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'application/json',
+          'Authorization': 'Bearer $supabaseJwt',
+        },
+      );
+      if (response.statusCode != 200) {
+        _throwFromResponse(response);
+      }
+      final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final session = _parseAuthResponse(data);
+      await _storage.saveSession(session);
+      return session;
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw const ApiException(
+        'Supabase нэвтрэлтийг баталгаажуулахад сүлжээний алдаа гарлаа.',
+      );
+    }
+  }
+
   Future<void> logout() async {
     await _storage.clearSession();
   }
