@@ -13,9 +13,11 @@ DATABASE_URL = os.getenv(
     "sqlite:///./familyscreen.db",
 )
 
-# Convert legacy postgres:// to modern postgresql:// for SQLAlchemy 2.0+ compatibility
+# Convert legacy postgres:// and generic postgresql:// to modern postgresql+psycopg2:// for SQLAlchemy 2.0+ compatibility
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 engine_kwargs: Dict[str, Any] = {"future": True}
 

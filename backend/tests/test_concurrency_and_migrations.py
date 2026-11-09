@@ -817,6 +817,11 @@ def test_postgresql_advisory_lock_and_concurrent_migrations():
     if not pg_url:
         pytest.skip("TEST_POSTGRES_URL environment variable not set. Skipping live PostgreSQL test.")
 
+    if pg_url.startswith("postgres://"):
+        pg_url = pg_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif pg_url.startswith("postgresql://"):
+        pg_url = pg_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
     pg_engine = create_engine(pg_url, pool_pre_ping=True)
 
     # 1. Test low-level advisory lock mutual exclusion across separate connections
