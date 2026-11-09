@@ -28,6 +28,11 @@ jobs:
         with:
           packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
+
       - name: Grant Execute Permission to Gradle Wrapper
         run: |
           cd android_tv_box
@@ -38,14 +43,26 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000"
         run: |
           cd android_tv_box
-          ./gradlew testReleaseUnitTest --info --stacktrace
+          for attempt in 1 2 3; do
+            ./gradlew testReleaseUnitTest --info --stacktrace && break || {
+              if [ $attempt -eq 3 ]; then exit 1; fi
+              echo "Gradle attempt $attempt failed, retrying in 5s..."
+              sleep 5
+            }
+          done
 
       - name: Build Android TV Debug & Release APKs
         env:
           GRADLE_OPTS: "-Dorg.gradle.internal.http.connectionTimeout=60000 -Dorg.gradle.internal.http.socketTimeout=60000"
         run: |
           cd android_tv_box
-          ./gradlew assembleDebug assembleRelease --stacktrace
+          for attempt in 1 2 3; do
+            ./gradlew assembleDebug assembleRelease --stacktrace && break || {
+              if [ $attempt -eq 3 ]; then exit 1; fi
+              echo "Gradle attempt $attempt failed, retrying in 5s..."
+              sleep 5
+            }
+          done
 
       - name: Upload Android TV APK Artifact
         uses: actions/upload-artifact@v4
