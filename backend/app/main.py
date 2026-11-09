@@ -81,7 +81,7 @@ from .security import (
     sha256_hex,
     verify_secret,
 )
-from .migrations import run_migrations
+from .migrations import init_db, run_migrations
 from .time_engine import (
     ScheduleWindow,
     TimeEngineInput,
@@ -90,9 +90,8 @@ from .time_engine import (
     resolve_local_datetime,
 )
 
-# Run database schema migrations and initialize schema
-run_migrations(engine)
-Base.metadata.create_all(bind=engine)
+# Safely initialize database schema and migrations
+init_db(engine)
 
 app = FastAPI(
     title="FamilyScreen Cloud API",
@@ -430,17 +429,24 @@ def _provision_supabase_family(
         db.refresh(family)
         return user, family
     except IntegrityError:
-        # Concurrent request already committed the user or membership
+        # Concurrent request already committed or is in the process of committing the user or membership
         db.rollback()
-        existing_user = db.scalar(
-            select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
-        )
-        if existing_user:
-            m = db.scalar(select(FamilyMember).where(FamilyMember.user_id == existing_user.id))
-            if m:
-                existing_family = db.get(Family, m.family_id)
-                if existing_family:
-                    return existing_user, existing_family
+        import time
+        for _ in range(5):
+            time.sleep(0.05)
+            existing_user = db.scalar(
+                select(User).where(
+                    (User.supabase_sub == principal.user_id)
+                    | (User.id == principal.user_id)
+                    | (User.email == user_email)
+                )
+            )
+            if existing_user:
+                m = db.scalar(select(FamilyMember).where(FamilyMember.user_id == existing_user.id))
+                if m:
+                    existing_family = db.get(Family, m.family_id)
+                    if existing_family:
+                        return existing_user, existing_family
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Зэрэгцээ хүсэлтийн зөрчил гарлаа. Түр хүлээгээд дахин оролдоно уу.",

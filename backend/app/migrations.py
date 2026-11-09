@@ -36,8 +36,11 @@ class Migration(NamedTuple):
 def _migration_001_upgrade(conn) -> None:
     """Add supabase_sub column and unique index to users table if not already present."""
     inspector = inspect(conn)
-    columns = [col["name"] for col in inspector.get_columns("users")]
+    if not inspector.has_table("users"):
+        logger.info("Migration 001: users table does not exist yet; skipping ALTER TABLE.")
+        return
 
+    columns = [col["name"] for col in inspector.get_columns("users")]
     if "supabase_sub" not in columns:
         logger.info("Applying migration 001: Adding supabase_sub column to users table")
         conn.execute(text("ALTER TABLE users ADD COLUMN supabase_sub VARCHAR(64)"))
@@ -51,6 +54,10 @@ def _migration_001_upgrade(conn) -> None:
 def _migration_001_downgrade(conn) -> None:
     """Remove supabase_sub column and unique index from users table."""
     inspector = inspect(conn)
+    if not inspector.has_table("users"):
+        logger.info("Migration 001 rollback: users table does not exist; skipping.")
+        return
+
     indexes = [idx["name"] for idx in inspector.get_indexes("users")]
     if "ix_users_supabase_sub" in indexes:
         conn.execute(text("DROP INDEX IF EXISTS ix_users_supabase_sub"))
@@ -131,3 +138,18 @@ def rollback_migration(engine: Engine, target_version: Optional[str] = None) -> 
                 rolled_back.append(mig.version)
 
     return rolled_back
+
+
+def init_db(engine: Engine) -> List[str]:
+    """Ensure baseline schema exists, then run all pending migrations.
+
+    Safe for both fresh (empty) databases and existing production databases.
+    Guarantees idempotency and zero data loss.
+    """
+    from .database import Base  # Local import to prevent circular import
+
+    # 1. Create baseline schema if not exists (checkfirst=True by default)
+    Base.metadata.create_all(bind=engine)
+
+    # 2. Run pending migrations
+    return run_migrations(engine)

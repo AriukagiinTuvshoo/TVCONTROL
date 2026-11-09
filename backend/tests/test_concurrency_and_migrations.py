@@ -26,7 +26,7 @@ from sqlalchemy.orm import sessionmaker
 import app.security as sec
 from app.database import Base, get_db
 from app.main import app
-from app.migrations import rollback_migration, run_migrations
+from app.migrations import Migration, MIGRATIONS, get_applied_migrations, init_db, rollback_migration, run_migrations
 from app.models import Family, FamilyMember, User
 
 
@@ -157,6 +157,166 @@ def test_migration_upgrade_and_downgrade_with_existing_data(tmp_path):
         assert "supabase_sub" not in cols
         users_after = conn.execute(text("SELECT id, email FROM users")).fetchall()
         assert any(u[0] == "u-legacy-1" for u in users_after)
+
+
+# ---------------------------------------------------------------------------
+# Test 1.1: Empty Database Initialization
+# ---------------------------------------------------------------------------
+def test_empty_database_initialization(tmp_path):
+    """Ensure init_db safely initializes a completely fresh/empty database."""
+    db_file = tmp_path / "fresh_empty.db"
+    fresh_engine = create_engine(f"sqlite:///{db_file}")
+
+    # Run init_db on brand new empty database
+    applied = init_db(fresh_engine)
+    assert "001_add_supabase_sub_to_users" in applied
+
+    # Verify all core tables and the migration tracker exist
+    with fresh_engine.connect() as conn:
+        tables = [r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
+        assert "users" in tables
+        assert "families" in tables
+        assert "devices" in tables
+        assert "schema_migrations" in tables
+
+        # Verify supabase_sub column exists on users table
+        cols = [c[1] for c in conn.execute(text("PRAGMA table_info(users)")).fetchall()]
+        assert "supabase_sub" in cols
+
+        # Verify migration record is stored
+        versions = [r[0] for r in conn.execute(text("SELECT version FROM schema_migrations")).fetchall()]
+        assert "001_add_supabase_sub_to_users" in versions
+
+
+# ---------------------------------------------------------------------------
+# Test 1.2: Existing Database Upgrade
+# ---------------------------------------------------------------------------
+def test_existing_database_upgrade(tmp_path):
+    """Ensure init_db upgrades an existing database without data loss."""
+    db_file = tmp_path / "existing_db.db"
+    existing_engine = create_engine(f"sqlite:///{db_file}")
+
+    # Seed legacy users table without supabase_sub
+    with existing_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+            CREATE TABLE users (
+                id VARCHAR(36) PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                phone VARCHAR(32),
+                password_hash VARCHAR(255) NOT NULL,
+                full_name VARCHAR(120) NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
+        """
+            )
+        )
+        conn.execute(
+            text(
+                """
+            INSERT INTO users (id, email, password_hash, full_name, created_at, updated_at)
+            VALUES ('u-exist-1', 'existing@familyscreen.mn', 'hash456', 'Existing User', '2026-01-01', '2026-01-01')
+        """
+            )
+        )
+
+    # Run init_db on existing database
+    applied = init_db(existing_engine)
+    assert "001_add_supabase_sub_to_users" in applied
+
+    # Verify legacy user is untouched and supabase_sub column is now present
+    with existing_engine.connect() as conn:
+        row = conn.execute(text("SELECT id, email, supabase_sub FROM users WHERE id='u-exist-1'")).fetchone()
+        assert row is not None
+        assert row[0] == "u-exist-1"
+        assert row[1] == "existing@familyscreen.mn"
+        assert row[2] is None
+
+
+# ---------------------------------------------------------------------------
+# Test 1.3: Repeated Migration Execution (Idempotency)
+# ---------------------------------------------------------------------------
+def test_repeated_migration_execution_is_idempotent(tmp_path):
+    """Ensure repeated migration runs produce identical results with zero errors."""
+    db_file = tmp_path / "idempotent.db"
+    engine = create_engine(f"sqlite:///{db_file}")
+
+    first_run = init_db(engine)
+    assert "001_add_supabase_sub_to_users" in first_run
+
+    # Second run should apply 0 migrations
+    second_run = run_migrations(engine)
+    assert second_run == []
+
+    # Third run should still apply 0 migrations
+    third_run = run_migrations(engine)
+    assert third_run == []
+
+    with engine.connect() as conn:
+        history = get_applied_migrations(conn)
+        assert history == ["001_add_supabase_sub_to_users"]
+
+
+# ---------------------------------------------------------------------------
+# Test 1.4: Migration Failure and Recovery (Atomic Rollback)
+# ---------------------------------------------------------------------------
+def test_migration_failure_and_recovery(tmp_path, monkeypatch):
+    """Ensure failing migrations roll back atomically and can recover upon fix."""
+    db_file = tmp_path / "failure_recovery.db"
+    engine = create_engine(f"sqlite:///{db_file}")
+
+    init_db(engine)
+
+    call_count = 0
+
+    def faulty_upgrade(conn):
+        nonlocal call_count
+        call_count += 1
+        conn.execute(
+            text(
+                "INSERT INTO users (id, email, password_hash, full_name, is_active, created_at, updated_at) "
+                "VALUES ('u-fail-1', 'fail@test.mn', 'h', 'N', 1, '2026-01-01', '2026-01-01')"
+            )
+        )
+        if call_count == 1:
+            raise RuntimeError("Simulated migration step failure")
+
+    def faulty_downgrade(conn):
+        conn.execute(text("DELETE FROM users WHERE id='u-fail-1'"))
+
+    test_migration = Migration(
+        version="002_faulty_test_step",
+        description="Faulty test migration",
+        upgrade=faulty_upgrade,
+        downgrade=faulty_downgrade,
+    )
+
+    # Monkeypatch MIGRATIONS to include the faulty migration
+    monkeypatch.setattr("app.migrations.MIGRATIONS", MIGRATIONS + [test_migration])
+
+    # First attempt: must fail and rollback
+    with pytest.raises(RuntimeError, match="Simulated migration step failure"):
+        run_migrations(engine)
+
+    # Verify atomic rollback: version 002 was NOT recorded and user row was rolled back
+    with engine.connect() as conn:
+        history = get_applied_migrations(conn)
+        assert "002_faulty_test_step" not in history
+        user = conn.execute(text("SELECT id FROM users WHERE id='u-fail-1'")).fetchone()
+        assert user is None
+
+    # Second attempt (after resolving the issue): succeeds cleanly
+    applied = run_migrations(engine)
+    assert "002_faulty_test_step" in applied
+
+    with engine.connect() as conn:
+        history = get_applied_migrations(conn)
+        assert "002_faulty_test_step" in history
+        user = conn.execute(text("SELECT id FROM users WHERE id='u-fail-1'")).fetchone()
+        assert user is not None
 
 
 # ---------------------------------------------------------------------------
