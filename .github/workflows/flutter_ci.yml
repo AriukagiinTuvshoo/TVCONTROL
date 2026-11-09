@@ -27,6 +27,11 @@ jobs:
           cd mobile_app
           flutter pub get
 
+      - name: Analyze Flutter Code
+        run: |
+          cd mobile_app
+          flutter analyze
+
       - name: Run Flutter Tests
         run: |
           cd mobile_app

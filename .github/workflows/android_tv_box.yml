@@ -23,9 +23,10 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Accept Android SDK Licenses
-        run: |
-          yes | sdkmanager --licenses || true
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
 
       - name: Grant Execute Permission to Gradle Wrapper
         run: |
@@ -40,7 +41,7 @@ jobs:
       - name: Build Android TV Debug & Release APKs
         run: |
           cd android_tv_box
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug assembleRelease --stacktrace
 
       - name: Upload Android TV APK Artifact
         uses: actions/upload-artifact@v4
