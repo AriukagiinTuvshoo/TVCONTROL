@@ -50,9 +50,22 @@ data class SyncResult(
  * - Exponential Backoff Retry on transient network/5xx errors
  */
 class TvBackendClient(
-    private val baseUrl: String = DEFAULT_BASE_URL,
+    private var baseUrl: String = DEFAULT_BASE_URL,
     private val offlineDb: TvOfflineDatabase? = null
 ) {
+    init {
+        val configured = offlineDb?.getBackendBaseUrl()
+        if (!configured.isNullOrBlank()) {
+            baseUrl = configured
+        }
+    }
+
+    fun setBaseUrl(url: String) {
+        baseUrl = url.trim().trimEnd('/')
+        offlineDb?.saveBackendBaseUrl(baseUrl)
+    }
+
+    fun getBaseUrl(): String = baseUrl
 
     /**
      * 1. Initiate TV Box Pairing (`POST /api/v1/devices/pair/init`).

@@ -73,6 +73,14 @@ class TvOfflineDatabase(context: Context) :
     // Device Credentials & Token Storage
     // -----------------------------------------------------------------------
 
+    fun saveBackendBaseUrl(url: String) {
+        prefs.edit().putString(KEY_BACKEND_BASE_URL, url.trim().trimEnd('/')).apply()
+    }
+
+    fun getBackendBaseUrl(): String {
+        return prefs.getString(KEY_BACKEND_BASE_URL, null) ?: "http://10.0.2.2:8000"
+    }
+
     fun saveDeviceCredentials(deviceId: String, familyId: String, deviceToken: String) {
         prefs.edit()
             .putString(KEY_DEVICE_ID, deviceId)
@@ -311,6 +319,7 @@ class TvOfflineDatabase(context: Context) :
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_FAMILY_ID = "family_id"
         private const val KEY_DEVICE_TOKEN = "device_token"
+        private const val KEY_BACKEND_BASE_URL = "backend_base_url"
         private const val KEY_POLICY_SNAPSHOT_JSON = "policy_snapshot_json"
         private const val KEY_USED_SECONDS_TODAY = "used_seconds_today"
         private const val KEY_LAST_TRUSTED_UTC_MS = "last_trusted_utc_ms"

@@ -71,6 +71,11 @@ class FamilyScreenLauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         offlineDb = TvOfflineDatabase(this)
+        intent?.getStringExtra("EXTRA_BACKEND_URL")?.let { customUrl ->
+            if (customUrl.isNotBlank()) {
+                offlineDb.saveBackendBaseUrl(customUrl)
+            }
+        }
         backendClient = TvBackendClient(offlineDb = offlineDb)
 
         val nowElapsed = SystemClock.elapsedRealtime()
@@ -262,6 +267,14 @@ class FamilyScreenLauncherActivity : Activity() {
 
     private fun handlePinOverride(addedMinutes: Int) {
         val enteredPin = pinInput.text.toString().trim()
+        if (enteredPin.startsWith("http://") || enteredPin.startsWith("https://")) {
+            offlineDb.saveBackendBaseUrl(enteredPin)
+            backendClient.setBaseUrl(enteredPin)
+            pinInput.setText("")
+            Toast.makeText(this, "Серверийн хаяг тохируулагдлаа: $enteredPin", Toast.LENGTH_LONG).show()
+            syncPolicyNow()
+            return
+        }
         val nowElapsed = SystemClock.elapsedRealtime()
         val localOk = timeEngine.verifyPinAndGrantOverride(enteredPin, addedMinutes, nowElapsed)
         if (!localOk) {
@@ -295,6 +308,19 @@ class FamilyScreenLauncherActivity : Activity() {
                     addedMinutes = addedMinutes,
                     deviceToken = token
                 )
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent?.getStringExtra("EXTRA_BACKEND_URL")?.let { customUrl ->
+            if (customUrl.isNotBlank()) {
+                offlineDb.saveBackendBaseUrl(customUrl)
+                backendClient.setBaseUrl(customUrl)
+                Toast.makeText(this, "Серверийн хаяг: $customUrl", Toast.LENGTH_SHORT).show()
+                syncPolicyNow()
             }
         }
     }
