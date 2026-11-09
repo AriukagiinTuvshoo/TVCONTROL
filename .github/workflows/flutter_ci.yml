@@ -2,7 +2,7 @@ name: FamilyScreen Mobile Flutter CI
 
 on:
   push:
-    branches: [ main, master, 'fix/**' ]
+    branches: [ main, master, 'fix/**', 'test/**' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
