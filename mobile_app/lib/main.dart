@@ -101,6 +101,18 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
         onAuthenticated: _onAuthenticated,
       );
     }
+    if (!_session!.pinConfigured) {
+      return PinSetupScreen(
+        apiClient: widget.apiClient,
+        session: _session!,
+        onPinConfigured: (updatedSession) {
+          setState(() {
+            _session = updatedSession;
+          });
+        },
+        onLogout: _onLogout,
+      );
+    }
     return ParentHomeShell(
       apiClient: widget.apiClient,
       session: _session!,
@@ -129,14 +141,18 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   bool _isLoginMode = true;
+  bool _isSupabaseMode = false;
   bool _isSubmitting = false;
   String? _errorMessage;
+  bool _showAccountLinking = false;
 
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _fullNameController = TextEditingController();
   final _familyNameController = TextEditingController();
   final _pinController = TextEditingController();
+  final _supabaseTokenController = TextEditingController();
+  final _linkPasswordController = TextEditingController();
 
   @override
   void dispose() {
@@ -145,6 +161,8 @@ class _AuthScreenState extends State<AuthScreen> {
     _fullNameController.dispose();
     _familyNameController.dispose();
     _pinController.dispose();
+    _supabaseTokenController.dispose();
+    _linkPasswordController.dispose();
     super.dispose();
   }
 
@@ -167,7 +185,7 @@ class _AuthScreenState extends State<AuthScreen> {
           password: _passwordController.text,
           fullName: _fullNameController.text,
           familyName: _familyNameController.text,
-          pinCode: _pinController.text,
+          pinCode: _pinController.text.trim().isEmpty ? null : _pinController.text.trim(),
         );
         widget.onAuthenticated(session);
       }
@@ -180,6 +198,71 @@ class _AuthScreenState extends State<AuthScreen> {
         setState(() {
           _isSubmitting = false;
         });
+      }
+    }
+  }
+
+  Future<void> _submitSupabase() async {
+    final token = _supabaseTokenController.text.trim();
+    if (token.isEmpty) {
+      setState(() => _errorMessage = 'Supabase JWT токеноо оруулна уу.');
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+      _showAccountLinking = false;
+    });
+
+    try {
+      final session = await widget.apiClient.loginWithSupabaseToken(token);
+      widget.onAuthenticated(session);
+    } on ApiException catch (e) {
+      setState(() {
+        _errorMessage = e.message;
+        if (e.statusCode == 409 ||
+            e.message.contains('ACCOUNT_LINKING_REQUIRED') ||
+            e.message.contains('данс холбох') ||
+            e.message.contains('хэрэгтэй')) {
+          _showAccountLinking = true;
+        }
+      });
+    } catch (_) {
+      setState(() => _errorMessage = 'Supabase нэвтрэлт амжилтгүй боллоо.');
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  Future<void> _submitAccountLink() async {
+    final password = _linkPasswordController.text;
+    final token = _supabaseTokenController.text.trim();
+    if (password.isEmpty) {
+      setState(() => _errorMessage = 'Дотоод дансны нууц үгээ оруулна уу.');
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final session = await widget.apiClient.linkSupabaseAccount(
+        localPassword: password,
+        supabaseJwt: token,
+      );
+      widget.onAuthenticated(session);
+    } on ApiException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (_) {
+      setState(() => _errorMessage = 'Данс холбоход алдаа гарлаа.');
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
       }
     }
   }
@@ -215,9 +298,11 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                       ),
                       Text(
-                        _isLoginMode
-                            ? 'Эцэг эхийн бүртгэлээр нэвтрэх'
-                            : 'Гэр бүлийн шинэ бүртгэл үүсгэх',
+                        _isSupabaseMode
+                            ? 'Supabase JWT токеноор нэвтрэх'
+                            : (_isLoginMode
+                                ? 'Эцэг эхийн бүртгэлээр нэвтрэх'
+                                : 'Гэр бүлийн шинэ бүртгэл үүсгэх'),
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.black54),
                       ),
@@ -248,85 +333,170 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                         const SizedBox(height: 16),
                       ],
-                      TextField(
-                        key: const Key('auth_email_field'),
-                        controller: _emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: const InputDecoration(
-                          labelText: 'Имэйл хаяг',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        key: const Key('auth_password_field'),
-                        controller: _passwordController,
-                        obscureText: true,
-                        decoration: const InputDecoration(
-                          labelText: 'Нууц үг (6+ тэмдэгт)',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      if (!_isLoginMode) ...[
-                        const SizedBox(height: 12),
+                      if (_isSupabaseMode) ...[
                         TextField(
-                          key: const Key('auth_fullname_field'),
-                          controller: _fullNameController,
+                          key: const Key('auth_supabase_token_field'),
+                          controller: _supabaseTokenController,
+                          maxLines: 2,
                           decoration: const InputDecoration(
-                            labelText: 'Эцэг эхийн нэр',
+                            labelText: 'Supabase JWT токен',
+                            hintText: 'Bearer eyJhbGciOi...',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        if (_showAccountLinking) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEFF6FF),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: const Color(0xFFBFDBFE)),
+                            ),
+                            child: const Text(
+                              'Энэ имэйл хаяг дээр өмнө нь бүртгэл үүссэн байна. Supabase данстай холбохын тулд дотоод нууц үгээ баталгаажуулна уу.',
+                              style: TextStyle(color: Color(0xFF1E40AF), fontSize: 13),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            key: const Key('auth_link_password_field'),
+                            controller: _linkPasswordController,
+                            obscureText: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Дотоод дансны нууц үг',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          FilledButton(
+                            key: const Key('auth_link_submit_button'),
+                            onPressed: _isSubmitting ? null : _submitAccountLink,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF2563EB),
+                            ),
+                            child: _isSubmitting
+                                ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text('Данс баталгаажуулж холбох'),
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            key: const Key('auth_supabase_submit_button'),
+                            onPressed: _isSubmitting ? null : _submitSupabase,
+                            child: _isSubmitting
+                                ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text('Supabase токеноор нэвтрэх'),
+                          ),
+                        ],
+                      ] else ...[
+                        TextField(
+                          key: const Key('auth_email_field'),
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: const InputDecoration(
+                            labelText: 'Имэйл хаяг',
                             border: OutlineInputBorder(),
                           ),
                         ),
                         const SizedBox(height: 12),
                         TextField(
-                          key: const Key('auth_familyname_field'),
-                          controller: _familyNameController,
+                          key: const Key('auth_password_field'),
+                          controller: _passwordController,
+                          obscureText: true,
                           decoration: const InputDecoration(
-                            labelText: 'Гэр бүлийн нэр (жнь: Болдын гэр бүл)',
+                            labelText: 'Нууц үг (6+ тэмдэгт)',
                             border: OutlineInputBorder(),
                           ),
                         ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          key: const Key('auth_pin_field'),
-                          controller: _pinController,
-                          keyboardType: TextInputType.number,
-                          maxLength: 6,
-                          decoration: const InputDecoration(
-                            labelText: 'ТВ нээх 4-6 оронтой PIN код',
-                            border: OutlineInputBorder(),
+                        if (!_isLoginMode) ...[
+                          const SizedBox(height: 12),
+                          TextField(
+                            key: const Key('auth_fullname_field'),
+                            controller: _fullNameController,
+                            decoration: const InputDecoration(
+                              labelText: 'Эцэг эхийн нэр',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            key: const Key('auth_familyname_field'),
+                            controller: _familyNameController,
+                            decoration: const InputDecoration(
+                              labelText: 'Гэр бүлийн нэр (жнь: Болдын гэр бүл)',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            key: const Key('auth_pin_field'),
+                            controller: _pinController,
+                            keyboardType: TextInputType.number,
+                            maxLength: 6,
+                            decoration: const InputDecoration(
+                              labelText: 'ТВ нээх 4-6 оронтой PIN код (сонголттой)',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          key: const Key('auth_submit_button'),
+                          onPressed: _isSubmitting ? null : _submit,
+                          child: _isSubmitting
+                              ? const SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(_isLoginMode ? 'Нэвтрэх' : 'Бүртгүүлэх'),
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton(
+                          key: const Key('auth_toggle_mode_button'),
+                          onPressed: () {
+                            setState(() {
+                              _isLoginMode = !_isLoginMode;
+                              _errorMessage = null;
+                            });
+                          },
+                          child: Text(
+                            _isLoginMode
+                                ? 'Шинэ хэрэглэгч үү? Бүртгэл үүсгэх'
+                                : 'Бүртгэлтэй юу? Нэвтрэх',
                           ),
                         ),
                       ],
-                      const SizedBox(height: 16),
-                      FilledButton(
-                        key: const Key('auth_submit_button'),
-                        onPressed: _isSubmitting ? null : _submit,
-                        child: _isSubmitting
-                            ? const SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : Text(_isLoginMode ? 'Нэвтрэх' : 'Бүртгүүлэх'),
-                      ),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        key: const Key('auth_toggle_mode_button'),
+                      const Divider(height: 24),
+                      TextButton.icon(
+                        key: const Key('auth_toggle_supabase_button'),
+                        icon: Icon(_isSupabaseMode ? Icons.login : Icons.cloud_outlined),
+                        label: Text(_isSupabaseMode ? 'Имэйл, нууц үгээр нэвтрэх' : 'Supabase токеноор нэвтрэх'),
                         onPressed: () {
                           setState(() {
-                            _isLoginMode = !_isLoginMode;
+                            _isSupabaseMode = !_isSupabaseMode;
                             _errorMessage = null;
+                            _showAccountLinking = false;
                           });
                         },
-                        child: Text(
-                          _isLoginMode
-                              ? 'Шинэ хэрэглэгч үү? Бүртгэл үүсгэх'
-                              : 'Бүртгэлтэй юу? Нэвтрэх',
-                        ),
                       ),
                     ],
                   ),
@@ -338,6 +508,251 @@ class _AuthScreenState extends State<AuthScreen> {
       ),
     );
   }
+}
+
+// ============================================================================
+// Secure Family PIN Setup Screen (Phase 8 & 9)
+// ============================================================================
+
+class PinSetupScreen extends StatefulWidget {
+  const PinSetupScreen({
+    super.key,
+    required this.apiClient,
+    required this.session,
+    required this.onPinConfigured,
+    required this.onLogout,
+  });
+
+  final FamilyScreenApiClient apiClient;
+  final AuthSessionData session;
+  final ValueChanged<AuthSessionData> onPinConfigured;
+  final VoidCallback onLogout;
+
+  @override
+  State<PinSetupScreen> createState() => _PinSetupScreenState();
+}
+
+class _PinSetupScreenState extends State<PinSetupScreen> {
+  final _pinController = TextEditingController();
+  final _confirmPinController = TextEditingController();
+  bool _isSubmitting = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    _confirmPinController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submitPin() async {
+    final pin = _pinController.text.trim();
+    final confirmPin = _confirmPinController.text.trim();
+
+    if (pin.isEmpty || confirmPin.isEmpty) {
+      setState(() => _errorMessage = 'PIN кодоо бүрэн оруулна уу.');
+      return;
+    }
+
+    if (!RegExp(r'^\d{4,6}$').hasMatch(pin)) {
+      setState(() => _errorMessage = 'PIN код 4-6 оронтой тоо байх ёстой.');
+      return;
+    }
+
+    if (pin != confirmPin) {
+      setState(() => _errorMessage = 'Оруулсан PIN кодууд хоорондоо таарахгүй байна.');
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+      _errorMessage = null;
+    });
+
+    try {
+      await widget.apiClient.initFamilyPin(
+        familyId: widget.session.familyId,
+        newPin: pin,
+      );
+
+      final updatedSession = AuthSessionData(
+        accessToken: widget.session.accessToken,
+        userId: widget.session.userId,
+        userEmail: widget.session.userEmail,
+        userFullName: widget.session.userFullName,
+        familyId: widget.session.familyId,
+        familyName: widget.session.familyName,
+        planTier: widget.session.planTier,
+        pinConfigured: true,
+        refreshToken: widget.session.refreshToken,
+        expiresAtMs: widget.session.expiresAtMs,
+      );
+
+      await widget.apiClient.tokenStorage.saveSession(updatedSession);
+      widget.onPinConfigured(updatedSession);
+    } on ApiException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (_) {
+      setState(() => _errorMessage = 'PIN код тохируулахад сүлжээний алдаа гарлаа.');
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      appBar: AppBar(
+        title: const Text('PIN код тохируулах'),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black87,
+        elevation: 0.5,
+        actions: [
+          IconButton(
+            key: const Key('pin_setup_logout_button'),
+            tooltip: 'Гарах',
+            icon: const Icon(Icons.logout),
+            onPressed: widget.onLogout,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Card(
+                color: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                ),
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 64,
+                          height: 64,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFEFF6FF),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.shield_outlined,
+                            size: 36,
+                            color: Color(0xFF2563EB),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Эцэг эхийн PIN код үүсгэх',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Таны гэр бүл (${widget.session.familyName}) шинээр үүссэн тул ТВ төхөөрөмж нээх, тохиргоо хамгаалах 4-6 оронтой нууц PIN кодоо тохируулна уу.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF64748B),
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      if (_errorMessage != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: const Color(0xFFFCA5A5)),
+                          ),
+                          child: Text(
+                            _errorMessage!,
+                            style: const TextStyle(
+                              color: Color(0xFFB91C1C),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      TextField(
+                        key: const Key('pin_setup_input'),
+                        controller: _pinController,
+                        obscureText: true,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        decoration: const InputDecoration(
+                          labelText: 'Шинэ 4-6 оронтой PIN код',
+                          prefixIcon: Icon(Icons.password_rounded),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        key: const Key('pin_setup_confirm_input'),
+                        controller: _confirmPinController,
+                        obscureText: true,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        decoration: const InputDecoration(
+                          labelText: 'PIN кодыг давтан оруулна уу',
+                          prefixIcon: Icon(Icons.check_circle_outline),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton(
+                        key: const Key('pin_setup_submit_button'),
+                        onPressed: _isSubmitting ? null : _submitPin,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          backgroundColor: const Color(0xFF2563EB),
+                        ),
+                        child: _isSubmitting
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text(
+                                'PIN код баталгаажуулж эхлэх',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 }
 
 // ============================================================================
