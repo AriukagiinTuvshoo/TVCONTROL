@@ -136,7 +136,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _passwordController = TextEditingController();
   final _fullNameController = TextEditingController();
   final _familyNameController = TextEditingController();
-  final _pinController = TextEditingController(text: '2580');
+  final _pinController = TextEditingController();
 
   @override
   void dispose() {

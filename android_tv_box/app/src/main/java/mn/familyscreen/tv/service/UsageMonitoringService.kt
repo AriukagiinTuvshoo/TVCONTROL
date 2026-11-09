@@ -286,7 +286,7 @@ class UsageMonitoringService : Service() {
                 policyVersion = 1,
                 dailyLimitSeconds = 90 * 60,
                 overrideSecondsToday = 0,
-                pinHash = LocalTimeEngine.sha256Hex("2580"),
+                pinHash = "",
                 anchorElapsedRealtimeMs = nowElapsed,
                 allowedApps = listOf(
                     AllowedAppEntry("com.google.android.apps.youtube.kids", "YouTube Kids", "VIDEO"),

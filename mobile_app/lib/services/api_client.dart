@@ -218,7 +218,41 @@ class FamilyScreenApiClient {
       familyId: family['id'] as String,
       familyName: family['name'] as String,
       planTier: (family['plan_tier'] as String?) ?? 'FREE',
+      pinConfigured: (family['pin_configured'] as bool?) ?? false,
     );
+  }
+
+  /// Explicitly links an existing local account to a verified Supabase login.
+  Future<AuthSessionData> linkSupabaseAccount({
+    required String localPassword,
+    String? supabaseJwt,
+  }) async {
+    try {
+      final headers = await _buildHeaders(authenticated: false);
+      if (supabaseJwt != null && supabaseJwt.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $supabaseJwt';
+      }
+      final response = await _http.post(
+        _uri('/api/v1/auth/supabase/link-account'),
+        headers: headers,
+        body: jsonEncode({
+          'local_password': localPassword,
+        }),
+      );
+      if (response.statusCode != 200) {
+        _throwFromResponse(response);
+      }
+      final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final session = _parseAuthResponse(data);
+      await _storage.saveSession(session);
+      return session;
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw const ApiException(
+        'Supabase данс холбоход сүлжээний алдаа гарлаа.',
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -457,6 +491,24 @@ class FamilyScreenApiClient {
     }
     final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
     return TimeStateDto.fromJson(data['time_state'] as Map<String, dynamic>);
+  }
+
+  Future<String> initFamilyPin({
+    required String familyId,
+    required String newPin,
+  }) async {
+    final response = await _http.post(
+      _uri('/api/v1/families/$familyId/pin/init'),
+      headers: await _buildHeaders(),
+      body: jsonEncode({
+        'new_pin': newPin.trim(),
+      }),
+    );
+    if (response.statusCode != 200) {
+      _throwFromResponse(response);
+    }
+    final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    return (data['message'] as String?) ?? 'PIN код амжилттай тохируулагдлаа.';
   }
 
   Future<String> updateFamilyPin({

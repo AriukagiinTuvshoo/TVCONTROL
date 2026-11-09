@@ -332,6 +332,7 @@ class LocalTimeEngine(
         }
 
         fun verifyPinHash(plainPin: String, storedHash: String): Boolean {
+            if (storedHash.isBlank() || plainPin.isBlank()) return false
             if (storedHash.startsWith("pbkdf2_sha256$")) {
                 val parts = storedHash.split("$")
                 if (parts.size != 4) return false

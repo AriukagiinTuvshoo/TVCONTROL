@@ -145,7 +145,7 @@ class FamilyScreenLauncherActivity : Activity() {
 
         // Parent PIN Override section (D-Pad friendly)
         pinInput = EditText(this).apply {
-            hint = "Эцэг эхийн PIN (жнь: 2580)"
+            hint = "Эцэг эхийн 4-6 оронтой PIN код"
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
             isFocusable = true

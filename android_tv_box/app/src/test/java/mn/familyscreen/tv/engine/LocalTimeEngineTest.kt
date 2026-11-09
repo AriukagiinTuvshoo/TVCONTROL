@@ -212,4 +212,17 @@ class LocalTimeEngineTest {
         assertEquals("DAILY_LIMIT_REACHED", evalBlock.reason)
         assertNull(evalBlock.activeWarningMinutes)
     }
+
+    @Test
+    fun `unconfigured pin hash safely rejects any override attempt`() {
+        val unconfiguredSnapshot = sampleSnapshot(dailyLimitSec = 3600, pinHash = "")
+        val engine = LocalTimeEngine(unconfiguredSnapshot)
+
+        // Attempting to override with any PIN (empty, common default, or random) must fail
+        assertFalse(engine.verifyPinAndGrantOverride("", 15, 10_000L))
+        assertFalse(engine.verifyPinAndGrantOverride("2580", 15, 10_000L))
+        assertFalse(engine.verifyPinAndGrantOverride("0000", 15, 10_000L))
+        assertFalse(engine.verifyPinAndGrantOverride("1234", 15, 10_000L))
+        assertEquals(0, engine.currentSnapshot().overrideSecondsToday)
+    }
 }

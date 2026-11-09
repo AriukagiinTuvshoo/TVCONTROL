@@ -11,6 +11,7 @@ class AuthSessionData {
     required this.familyId,
     required this.familyName,
     required this.planTier,
+    this.pinConfigured = false,
     this.refreshToken,
     this.expiresAtMs,
   });
@@ -22,6 +23,7 @@ class AuthSessionData {
   final String familyId;
   final String familyName;
   final String planTier;
+  final bool pinConfigured;
   final String? refreshToken;
   final int? expiresAtMs;
 
