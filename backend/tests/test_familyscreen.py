@@ -625,55 +625,59 @@ def test_tv_box_pairing_token_offline_sync_policy_and_instant_lock(client: TestC
 def test_supabase_jwt_auth_and_security_production_checks(client):
     """Verify Supabase Auth JWT verification and strict production secret key enforcement."""
     from datetime import datetime, timezone
+    from unittest.mock import patch
     import jwt
-    from app.security import SECRET_KEY, verify_access_token
+    import app.security as sec
 
-    # 1. Supabase standard JWT generation with current timestamp
+    # 1. Supabase standard JWT generation with configured secret
+    test_supabase_secret = "test-supabase-secret-key-32chars-long"
     now_ts = int(datetime.now(timezone.utc).timestamp())
     supabase_payload = {
         "sub": "supabase-usr-9999",
         "email": "supabase_parent@familyscreen.mn",
         "family_id": "fam-supabase-9999",
         "role": "authenticated",
+        "aud": "authenticated",
         "iat": now_ts,
         "exp": now_ts + 86400,
     }
-    supabase_token = jwt.encode(supabase_payload, SECRET_KEY, algorithm="HS256")
+    supabase_token = jwt.encode(supabase_payload, test_supabase_secret, algorithm="HS256")
 
     # 2. Test verify_access_token parses Supabase JWT
-    principal = verify_access_token(supabase_token)
-    assert principal.user_id == "supabase-usr-9999"
-    assert principal.family_id == "fam-supabase-9999"
-    assert principal.auth_provider == "supabase"
+    with patch.object(sec, "SUPABASE_JWT_SECRET", test_supabase_secret):
+        principal = sec.verify_access_token(supabase_token)
+        assert principal.user_id == "supabase-usr-9999"
+        assert principal.family_id == "fam-supabase-9999"
+        assert principal.auth_provider == "supabase"
 
-    # 3. Test API endpoint with Supabase Bearer token
-    from app.models import Family, User
-    db_gen = app.dependency_overrides[get_db]()
-    db = next(db_gen)
-    try:
-        user = User(
-            id="supabase-usr-9999",
-            email="supabase_parent@familyscreen.mn",
-            password_hash="supabase_managed_external_auth",
-            full_name="Supabase Parent",
-        )
-        family = Family(
-            id="fam-supabase-9999",
-            name="Supabase Гэр бүл",
-            pin_hash="mock_pin_hash",
-        )
-        db.add_all([user, family])
-        db.commit()
-    finally:
+        # 3. Test API endpoint with Supabase Bearer token
+        from app.models import Family, User
+        db_gen = app.dependency_overrides[get_db]()
+        db = next(db_gen)
         try:
-            next(db_gen)
-        except StopIteration:
-            pass
+            user = User(
+                id="supabase-usr-9999",
+                email="supabase_parent@familyscreen.mn",
+                password_hash="supabase_managed_external_auth",
+                full_name="Supabase Parent",
+            )
+            family = Family(
+                id="fam-supabase-9999",
+                name="Supabase Гэр бүл",
+                pin_hash="mock_pin_hash",
+            )
+            db.add_all([user, family])
+            db.commit()
+        finally:
+            try:
+                next(db_gen)
+            except StopIteration:
+                pass
 
-    headers = {"Authorization": f"Bearer {supabase_token}"}
-    res = client.get("/api/v1/auth/me", headers=headers)
-    assert res.status_code == 200
-    assert res.json()["user"]["email"] == "supabase_parent@familyscreen.mn"
+        headers = {"Authorization": f"Bearer {supabase_token}"}
+        res = client.get("/api/v1/auth/me", headers=headers)
+        assert res.status_code == 200
+        assert res.json()["user"]["email"] == "supabase_parent@familyscreen.mn"
 
     # 4. Test strict production secret key validation logic
     import os
