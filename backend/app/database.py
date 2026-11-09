@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Generator
+from typing import Any, Dict, Generator
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -13,13 +13,22 @@ DATABASE_URL = os.getenv(
     "sqlite:///./familyscreen.db",
 )
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+# Convert legacy postgres:// to modern postgresql:// for SQLAlchemy 2.0+ compatibility
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args,
-    future=True,
-)
+engine_kwargs: Dict[str, Any] = {"future": True}
+
+if DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+elif DATABASE_URL.startswith("postgresql"):
+    # Production-grade connection pooling for PostgreSQL (e.g. Supabase, Cloud SQL, Neon)
+    engine_kwargs["pool_size"] = int(os.getenv("DB_POOL_SIZE", "10"))
+    engine_kwargs["max_overflow"] = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_recycle"] = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 
 if DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine, "connect")

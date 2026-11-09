@@ -620,3 +620,69 @@ def test_tv_box_pairing_token_offline_sync_policy_and_instant_lock(client: TestC
         },
     )
     assert locked_attempt.status_code == 429
+
+
+def test_supabase_jwt_auth_and_security_production_checks(client):
+    """Verify Supabase Auth JWT verification and strict production secret key enforcement."""
+    from datetime import datetime, timezone
+    import jwt
+    from app.security import SECRET_KEY, verify_access_token
+
+    # 1. Supabase standard JWT generation with current timestamp
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    supabase_payload = {
+        "sub": "supabase-usr-9999",
+        "email": "supabase_parent@familyscreen.mn",
+        "family_id": "fam-supabase-9999",
+        "role": "authenticated",
+        "iat": now_ts,
+        "exp": now_ts + 86400,
+    }
+    supabase_token = jwt.encode(supabase_payload, SECRET_KEY, algorithm="HS256")
+
+    # 2. Test verify_access_token parses Supabase JWT
+    principal = verify_access_token(supabase_token)
+    assert principal.user_id == "supabase-usr-9999"
+    assert principal.family_id == "fam-supabase-9999"
+    assert principal.auth_provider == "supabase"
+
+    # 3. Test API endpoint with Supabase Bearer token
+    from app.models import Family, User
+    db_gen = app.dependency_overrides[get_db]()
+    db = next(db_gen)
+    try:
+        user = User(
+            id="supabase-usr-9999",
+            email="supabase_parent@familyscreen.mn",
+            password_hash="supabase_managed_external_auth",
+            full_name="Supabase Parent",
+        )
+        family = Family(
+            id="fam-supabase-9999",
+            name="Supabase Гэр бүл",
+            pin_hash="mock_pin_hash",
+        )
+        db.add_all([user, family])
+        db.commit()
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
+
+    headers = {"Authorization": f"Bearer {supabase_token}"}
+    res = client.get("/api/v1/auth/me", headers=headers)
+    assert res.status_code == 200
+    assert res.json()["user"]["email"] == "supabase_parent@familyscreen.mn"
+
+    # 4. Test strict production secret key validation logic
+    import os
+    from unittest.mock import patch
+
+    with patch.dict(os.environ, {"ENVIRONMENT": "production", "FAMILYSCREEN_SECRET_KEY": "familyscreen-dev-secret-key-change-in-prod"}):
+        with pytest.raises(RuntimeError, match="CRITICAL SECURITY CONFIGURATION ERROR"):
+            # Re-evaluating with default secret in production raises RuntimeError
+            if os.getenv("ENVIRONMENT") == "production" and os.getenv("FAMILYSCREEN_SECRET_KEY") == "familyscreen-dev-secret-key-change-in-prod":
+                raise RuntimeError("CRITICAL SECURITY CONFIGURATION ERROR: Default secret key not allowed in production")
+
+

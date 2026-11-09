@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import os
 from datetime import datetime, time, timedelta, timezone
 from typing import List, Optional
 
@@ -93,10 +94,29 @@ app = FastAPI(
     description="Parental Control & Digital Wellbeing Ecosystem for Android TV & FamilyScreen Box",
 )
 
+# Production-grade CORS policy: configurable via FAMILYSCREEN_ALLOWED_ORIGINS
+allowed_origins_raw = os.getenv("FAMILYSCREEN_ALLOWED_ORIGINS")
+if allowed_origins_raw:
+    origins = [orig.strip() for orig in allowed_origins_raw.split(",") if orig.strip()]
+else:
+    origins = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+        "http://10.0.2.2:8000",
+        "https://app.familyscreen.mn",
+        "https://familyscreen.mn",
+    ]
+
+# If wildcard "*" is explicitly supplied, allow_credentials must be False per the CORS spec
+allow_credentials = "*" not in origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

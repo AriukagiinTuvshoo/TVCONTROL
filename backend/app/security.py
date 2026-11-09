@@ -1,4 +1,4 @@
-"""Security utilities: password hashing, PIN hashing, rate-limiting, and HMAC tokens."""
+"""Security utilities: password hashing, PIN hashing, rate-limiting, HMAC tokens, and Supabase JWT verification."""
 
 from __future__ import annotations
 
@@ -10,10 +10,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import jwt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development")).lower()
 SECRET_KEY = os.getenv("FAMILYSCREEN_SECRET_KEY", "familyscreen-dev-secret-key-change-in-prod")
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", None)
+
+# Enforce strict secret key validation in production to prevent deployment with default credentials
+if ENVIRONMENT == "production":
+    if SECRET_KEY == "familyscreen-dev-secret-key-change-in-prod" or len(SECRET_KEY) < 32:
+        raise RuntimeError(
+            "CRITICAL SECURITY CONFIGURATION ERROR: FAMILYSCREEN_SECRET_KEY must be set to a "
+            "cryptographically strong secret (minimum 32 characters) in production environment!"
+        )
+
 PBKDF2_ITERATIONS = 120_000
 MAX_PIN_ATTEMPTS = 5
 PIN_LOCKOUT_MINUTES = 15
@@ -30,6 +42,7 @@ class AuthPrincipal:
     user_id: str
     family_id: str
     issued_at: int
+    auth_provider: str = "local"
 
 
 @dataclass(frozen=True)
@@ -142,13 +155,56 @@ def verify_device_token(token: str) -> DevicePrincipal:
     return DevicePrincipal(device_id=device_id, family_id=family_id, issued_at=issued_at)
 
 
+def verify_supabase_jwt(token: str) -> AuthPrincipal:
+    """Validate Supabase Auth RS256/HS256 JWT token."""
+    secret = SUPABASE_JWT_SECRET or SECRET_KEY
+    try:
+        payload = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256", "RS256"],
+            options={"verify_aud": False},
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Supabase JWT токены sub талбар олдсонгүй.",
+            )
+        family_id = payload.get("family_id") or payload.get("app_metadata", {}).get("family_id") or f"fam-{user_id}"
+        issued_at = payload.get("iat", int(datetime.now(timezone.utc).timestamp()))
+        return AuthPrincipal(
+            user_id=str(user_id),
+            family_id=str(family_id),
+            issued_at=int(issued_at),
+            auth_provider="supabase",
+        )
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Supabase JWT токен хүчингүй байна: {str(exc)}",
+        ) from exc
+
+
 def verify_access_token(token: str) -> AuthPrincipal:
-    """Verify HMAC signature and expiration of an access token."""
-    if not token or "." not in token:
+    """Verify access token supporting both standard HMAC tokens and Supabase JWTs."""
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Нэвтрэх эрхийн токен буруу эсвэл байхгүй байна.",
         )
+
+    # 1. Supabase JWT standard format (header.payload.signature)
+    if token.count(".") == 2:
+        return verify_supabase_jwt(token)
+
+    # 2. FamilyScreen High-Performance HMAC Token
+    if "." not in token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Нэвтрэх эрхийн токен буруу эсвэл байхгүй байна.",
+        )
+
     payload, provided_sig = token.rsplit(".", 1)
     expected_sig = hmac.new(
         SECRET_KEY.encode("utf-8"),
@@ -184,7 +240,7 @@ def verify_access_token(token: str) -> AuthPrincipal:
             detail="Нэвтрэх хугацаа дууссан байна. Дахин нэвтэрнэ үү.",
         )
 
-    return AuthPrincipal(user_id=user_id, family_id=family_id, issued_at=issued_at)
+    return AuthPrincipal(user_id=user_id, family_id=family_id, issued_at=issued_at, auth_provider="local")
 
 
 def get_current_principal(
