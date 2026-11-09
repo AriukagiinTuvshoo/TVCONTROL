@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.db
+*.sqlite3
+.pytest_cache/
+*.log
+
+# Environment variables
+.env
+.env.local
+
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Android / Kotlin / Gradle
+.gradle/
+local.properties
+*.apk
+*.aab
+*.iml
+.idea/
+.vscode/
+.DS_Store

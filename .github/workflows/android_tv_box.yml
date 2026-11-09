@@ -1,0 +1,44 @@
+name: FamilyScreen Android TV Box CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Test Android TV Box APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Run Android TV Unit Tests
+        run: |
+          cd android_tv_box
+          chmod +x gradlew
+          ./gradlew testReleaseUnitTest --info
+
+      - name: Build Android TV Release APK
+        run: |
+          cd android_tv_box
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FamilyScreen-TvBox-Release-APK
+          path: android_tv_box/app/build/outputs/apk/release/*.apk
