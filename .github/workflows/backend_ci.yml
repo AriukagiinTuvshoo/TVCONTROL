@@ -2,7 +2,7 @@ name: FamilyScreen Backend CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'fix/**' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -32,4 +32,4 @@ jobs:
           PYTHONPATH: backend
           FAMILYSCREEN_SECRET_KEY: test-secret-key-for-ci-minimum-32-chars-long
         run: |
-          pytest -v backend/tests/test_familyscreen.py
+          pytest -v backend/tests/

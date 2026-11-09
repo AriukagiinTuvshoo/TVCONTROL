@@ -2,7 +2,7 @@ name: FamilyScreen Android TV Box CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'fix/**' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
