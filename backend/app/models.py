@@ -39,6 +39,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid_str)
+    supabase_sub: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     phone: Mapped[Optional[str]] = mapped_column(String(32), unique=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -70,6 +71,15 @@ class Family(Base):
     children: Mapped[List["Child"]] = relationship(back_populates="family", cascade="all, delete-orphan")
     devices: Mapped[List["Device"]] = relationship(back_populates="family", cascade="all, delete-orphan")
     notifications: Mapped[List["Notification"]] = relationship(back_populates="family", cascade="all, delete-orphan")
+
+    @property
+    def pin_configured(self) -> bool:
+        """True if a valid parent PIN has been explicitly initialized."""
+        return bool(self.pin_hash and self.pin_hash.strip())
+
+    @property
+    def has_pin_configured(self) -> bool:
+        return self.pin_configured
 
 
 class FamilyMember(Base):

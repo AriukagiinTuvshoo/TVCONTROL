@@ -24,6 +24,7 @@ class FamilyOut(BaseModel):
     name: str
     timezone: str
     plan_tier: str
+    pin_configured: bool = False
 
 
 class RegisterRequest(BaseModel):
@@ -44,8 +45,12 @@ class LoginRequest(BaseModel):
 class SupabaseSyncRequest(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=120)
     family_name: Optional[str] = Field(default=None, max_length=120)
-    pin_code: Optional[str] = Field(default="2580", pattern=r"^\d{4,6}$")
+    pin_code: Optional[str] = Field(default=None, pattern=r"^\d{4,6}$")
     timezone: Optional[str] = Field(default="Asia/Ulaanbaatar")
+
+
+class SupabaseAccountLinkRequest(BaseModel):
+    local_password: str = Field(..., min_length=1, max_length=128, description="Password of the existing local account to link")
 
 
 class AuthResponse(BaseModel):
@@ -53,6 +58,10 @@ class AuthResponse(BaseModel):
     token_type: str = "bearer"
     user: UserOut
     family: FamilyOut
+
+
+class PinInitRequest(BaseModel):
+    new_pin: str = Field(..., pattern=r"^\d{4,6}$", description="4 to 6 digit initial parent PIN")
 
 
 class PinUpdateRequest(BaseModel):

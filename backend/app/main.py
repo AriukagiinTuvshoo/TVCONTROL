@@ -47,12 +47,14 @@ from .schemas import (
     NotificationOut,
     OverrideCreateRequest,
     OverrideResponse,
+    PinInitRequest,
     PinUpdateRequest,
     PinUpdateResponse,
     PolicyOut,
     PolicyUpdateRequest,
     RegisterRequest,
     ScheduleItemSchema,
+    SupabaseAccountLinkRequest,
     SupabaseSyncRequest,
     TimeStateOut,
     UsageReportResponse,
@@ -343,24 +345,41 @@ def _provision_supabase_family(
     timezone_str: Optional[str] = None,
 ) -> tuple[User, Family]:
     """Idempotently provision or retrieve User and Family for a Supabase-authenticated parent."""
-    # 1. Search existing user by sub or email
-    user = db.get(User, principal.user_id)
+    # 1. Search existing user strictly by verified Supabase sub or primary ID
+    user = db.scalar(
+        select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
+    )
+
+    # 2. Prevent account takeover: if local account exists with same email, do NOT auto-link!
     if not user and principal.email:
-        user = db.scalar(select(User).where(User.email == principal.email.lower().strip()))
+        existing_by_email = db.scalar(select(User).where(User.email == principal.email.lower().strip()))
+        if existing_by_email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="ACCOUNT_LINKING_REQUIRED: Энэ имэйл хаягтай дотоод хэрэглэгчийн бүртгэл байна. Нууц үгээ баталгаажуулж дансаа холбоно уу.",
+            )
 
     if user:
         membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == user.id))
         if membership:
             family = db.get(Family, membership.family_id)
             if family:
+                # If custom PIN explicitly provided and family PIN was unconfigured, set it
+                if custom_pin and not family.has_pin_configured:
+                    family.pin_hash = hash_secret(custom_pin)
+                    family.pin_failed_attempts = 0
+                    family.pin_locked_until = None
+                    db.commit()
+                    db.refresh(family)
                 return user, family
 
-    # 2. If user not found, create User
+    # 3. If user does not exist, provision new User linked to this Supabase sub
     user_email = (principal.email or f"{principal.user_id}@supabase.familyscreen.mn").lower().strip()
     user_name = principal.full_name or "Эцэг эх"
     if not user:
         user = User(
             id=principal.user_id,
+            supabase_sub=principal.user_id,
             email=user_email,
             password_hash="supabase_managed_auth",
             full_name=user_name,
@@ -368,21 +387,21 @@ def _provision_supabase_family(
         db.add(user)
         db.flush()
 
-    # 3. Create initial Family
+    # 4. Create initial Family with unconfigured PIN (None) unless explicitly provided by parent
     family_name = custom_family_name or f"{user_name}-н гэр бүл"
-    pin_code = custom_pin or "2580"
+    pin_hash = hash_secret(custom_pin) if custom_pin else None
     tz = timezone_str or "Asia/Ulaanbaatar"
 
     family = Family(
         name=family_name,
         timezone=tz,
         plan_tier="FREE",
-        pin_hash=hash_secret(pin_code),
+        pin_hash=pin_hash,
     )
     db.add(family)
     db.flush()
 
-    # 4. Associate membership as OWNER
+    # 5. Associate membership as OWNER
     membership = FamilyMember(
         family_id=family.id,
         user_id=user.id,
@@ -400,8 +419,14 @@ def get_current_session(
     principal: AuthPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> AuthResponse:
-    user = db.get(User, principal.user_id)
-    family = db.get(Family, principal.family_id)
+    user = db.scalar(
+        select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
+    )
+    family = None
+    if user:
+        membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == user.id))
+        if membership:
+            family = db.get(Family, membership.family_id)
 
     if not user or not family:
         # If authenticated via Supabase, automatically JIT-provision initial account
@@ -444,6 +469,123 @@ def sync_supabase_parent_profile(
     )
 
 
+@app.post("/api/v1/auth/supabase/link-account", response_model=AuthResponse)
+def link_supabase_account(
+    payload: SupabaseAccountLinkRequest,
+    principal: AuthPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AuthResponse:
+    """Explicitly link an existing local account to a verified Supabase login by proving local credentials."""
+    if principal.auth_provider != "supabase":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Зөвхөн Supabase нэвтрэлттэй үед данс холбох боломжтой.",
+        )
+
+    if not principal.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Supabase токенд имэйл хаяг олдсонгүй.",
+        )
+
+    if not principal.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supabase имэйл хаяг баталгаажаагүй байна. Эхлээд имэйлээ баталгаажуулна уу.",
+        )
+
+    norm_email = principal.email.lower().strip()
+    local_user = db.scalar(select(User).where(User.email == norm_email))
+    if not local_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Холбох дотоод хэрэглэгчийн бүртгэл олдсонгүй.",
+        )
+
+    if local_user.supabase_sub and local_user.supabase_sub != principal.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Энэ бүртгэл аль хэдийн өөр Supabase данстай холбогдсон байна.",
+        )
+
+    if not verify_secret(payload.local_password, local_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Дотоод хэрэглэгчийн нууц үг буруу байна.",
+        )
+
+    local_user.supabase_sub = principal.user_id
+    db.commit()
+    db.refresh(local_user)
+
+    membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == local_user.id))
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Холбогдсон хэрэглэгчийн гэр бүлийн мэдээлэл олдсонгүй.",
+        )
+    family = db.get(Family, membership.family_id)
+    if not family:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Гэр бүл олдсонгүй.",
+        )
+
+    token = generate_access_token(local_user.id, family.id)
+    return AuthResponse(
+        access_token=token,
+        user=UserOut.model_validate(local_user),
+        family=FamilyOut.model_validate(family),
+    )
+
+
+@app.post("/api/v1/families/{family_id}/pin/init", response_model=PinUpdateResponse)
+def initialize_family_pin(
+    family_id: str,
+    payload: PinInitRequest,
+    principal: AuthPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> PinUpdateResponse:
+    """Explicitly initialize the parent PIN for a newly created family (owner only)."""
+    ensure_family_access(principal, family_id, db=db)
+    family = db.get(Family, family_id)
+    if not family:
+        raise HTTPException(status_code=404, detail="Гэр бүл олдсонгүй.")
+
+    db_user = db.scalar(
+        select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
+    )
+    effective_user_id = db_user.id if db_user else principal.user_id
+
+    membership = db.scalar(
+        select(FamilyMember).where(
+            FamilyMember.family_id == family_id,
+            FamilyMember.user_id == effective_user_id,
+        )
+    )
+    if not membership or membership.role != "OWNER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Зөвхөн гэр бүлийн админ PIN анх тохируулах эрхтэй.",
+        )
+
+    if family.has_pin_configured:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="PIN код аль хэдийн тохируулагдсан байна. Шинэчлэхийн тулд одоогийн PIN кодоо ашиглана уу.",
+        )
+
+    family.pin_hash = hash_secret(payload.new_pin)
+    family.pin_failed_attempts = 0
+    family.pin_locked_until = None
+    db.commit()
+
+    return PinUpdateResponse(
+        family_id=family.id,
+        message="Эцэг эхийн PIN код амжилттай тохируулагдлаа.",
+    )
+
+
 @app.put("/api/v1/families/{family_id}/pin", response_model=PinUpdateResponse)
 def update_family_pin(
     family_id: str,
@@ -451,14 +593,45 @@ def update_family_pin(
     principal: AuthPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> PinUpdateResponse:
-    ensure_family_access(principal, family_id)
+    """Update existing parent PIN requiring current PIN verification and rate-limiting lockout."""
+    ensure_family_access(principal, family_id, db=db)
     family = db.get(Family, family_id)
     if not family:
         raise HTTPException(status_code=404, detail="Гэр бүл олдсонгүй.")
 
-    if payload.current_pin is not None and family.pin_hash is not None:
-        if not verify_secret(payload.current_pin, family.pin_hash):
-            raise HTTPException(status_code=403, detail="Одоогийн PIN код буруу байна.")
+    if not family.has_pin_configured:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PIN код хараахан тохируулаагүй байна. /pin/init endpoint-ийг ашиглана уу.",
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    if is_pin_locked(family.pin_locked_until, now_utc):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Олон удаа буруу оруулсан тул PIN код 15 минут түр түгжигдсэн байна.",
+        )
+
+    if not payload.current_pin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Одоогийн PIN кодыг заавал оруулах шаардлагатай.",
+        )
+
+    if not verify_secret(payload.current_pin, family.pin_hash):
+        family.pin_failed_attempts += 1
+        if family.pin_failed_attempts >= MAX_PIN_ATTEMPTS:
+            family.pin_locked_until = compute_lockout_expiry(now_utc)
+        db.commit()
+        if family.pin_failed_attempts >= MAX_PIN_ATTEMPTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="PIN кодыг 5 удаа буруу оруулсан тул 15 минут түгжигдлээ.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Одоогийн PIN код буруу байна.",
+        )
 
     family.pin_hash = hash_secret(payload.new_pin)
     family.pin_failed_attempts = 0

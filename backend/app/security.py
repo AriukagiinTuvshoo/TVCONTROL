@@ -63,6 +63,7 @@ class AuthPrincipal:
     auth_provider: str = "local"
     email: Optional[str] = None
     full_name: Optional[str] = None
+    email_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,14 @@ def verify_supabase_jwt(token: str) -> AuthPrincipal:
     full_name = user_meta.get("full_name") or user_meta.get("name")
     family_id = payload.get("family_id") or app_meta.get("family_id") or f"fam-{user_id}"
     issued_at = payload.get("iat", int(datetime.now(timezone.utc).timestamp()))
+    email_confirmed_at = payload.get("email_confirmed_at")
+    user_meta_verified = user_meta.get("email_verified") if isinstance(user_meta, dict) else None
+    provider = app_meta.get("provider") if isinstance(app_meta, dict) else None
+    email_verified = bool(
+        email_confirmed_at
+        or (user_meta_verified is True)
+        or (provider in ["google", "apple", "github"] and email)
+    )
 
     return AuthPrincipal(
         user_id=str(user_id),
@@ -360,6 +369,7 @@ def verify_supabase_jwt(token: str) -> AuthPrincipal:
         auth_provider="supabase",
         email=str(email) if email else None,
         full_name=str(full_name) if full_name else None,
+        email_verified=email_verified,
     )
 
 
@@ -467,13 +477,38 @@ def get_optional_device_principal(
     return verify_device_token(raw_token)
 
 
-def ensure_family_access(principal: AuthPrincipal, target_family_id: str) -> None:
+def ensure_family_access(
+    principal: AuthPrincipal,
+    target_family_id: str,
+    db: Optional[Any] = None,
+) -> None:
     """Raise 403 Forbidden if the authenticated parent belongs to a different family."""
-    if principal.family_id != target_family_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Танд өөр гэр бүлийн мэдээлэлд хандах эрх байхгүй байна.",
+    if principal.family_id == target_family_id:
+        return
+
+    if db is not None:
+        from sqlalchemy import select
+        from .models import FamilyMember, User
+
+        db_user = db.scalar(
+            select(User).where(
+                (User.supabase_sub == principal.user_id) | (User.id == principal.user_id)
+            )
         )
+        effective_user_id = db_user.id if db_user else principal.user_id
+        membership = db.scalar(
+            select(FamilyMember).where(
+                FamilyMember.family_id == target_family_id,
+                FamilyMember.user_id == effective_user_id,
+            )
+        )
+        if membership:
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Танд өөр гэр бүлийн мэдээлэлд хандах эрх байхгүй байна.",
+    )
 
 
 def ensure_device_access(
