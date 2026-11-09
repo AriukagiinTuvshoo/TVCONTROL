@@ -30,7 +30,8 @@
         android:allowBackup="false"
         android:label="FamilyScreen TV"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true">
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false">
 
         <!-- FamilyScreen Box Custom Home Launcher & Android TV Main Activity -->
         <activity
