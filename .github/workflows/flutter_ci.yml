@@ -1,0 +1,33 @@
+name: FamilyScreen Mobile Flutter CI
+
+on:
+  push:
+    branches: [ main, master, 'fix/**' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Flutter Tests & Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: |
+          cd mobile_app
+          flutter pub get
+
+      - name: Run Flutter Tests
+        run: |
+          cd mobile_app
+          flutter test
