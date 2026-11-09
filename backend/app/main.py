@@ -53,6 +53,7 @@ from .schemas import (
     PolicyUpdateRequest,
     RegisterRequest,
     ScheduleItemSchema,
+    SupabaseSyncRequest,
     TimeStateOut,
     UsageReportResponse,
     UsageSessionCreateRequest,
@@ -334,6 +335,66 @@ def login_parent(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthRe
     )
 
 
+def _provision_supabase_family(
+    db: Session,
+    principal: AuthPrincipal,
+    custom_family_name: Optional[str] = None,
+    custom_pin: Optional[str] = None,
+    timezone_str: Optional[str] = None,
+) -> tuple[User, Family]:
+    """Idempotently provision or retrieve User and Family for a Supabase-authenticated parent."""
+    # 1. Search existing user by sub or email
+    user = db.get(User, principal.user_id)
+    if not user and principal.email:
+        user = db.scalar(select(User).where(User.email == principal.email.lower().strip()))
+
+    if user:
+        membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == user.id))
+        if membership:
+            family = db.get(Family, membership.family_id)
+            if family:
+                return user, family
+
+    # 2. If user not found, create User
+    user_email = (principal.email or f"{principal.user_id}@supabase.familyscreen.mn").lower().strip()
+    user_name = principal.full_name or "Эцэг эх"
+    if not user:
+        user = User(
+            id=principal.user_id,
+            email=user_email,
+            password_hash="supabase_managed_auth",
+            full_name=user_name,
+        )
+        db.add(user)
+        db.flush()
+
+    # 3. Create initial Family
+    family_name = custom_family_name or f"{user_name}-н гэр бүл"
+    pin_code = custom_pin or "2580"
+    tz = timezone_str or "Asia/Ulaanbaatar"
+
+    family = Family(
+        name=family_name,
+        timezone=tz,
+        plan_tier="FREE",
+        pin_hash=hash_secret(pin_code),
+    )
+    db.add(family)
+    db.flush()
+
+    # 4. Associate membership as OWNER
+    membership = FamilyMember(
+        family_id=family.id,
+        user_id=user.id,
+        role="OWNER",
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(user)
+    db.refresh(family)
+    return user, family
+
+
 @app.get("/api/v1/auth/me", response_model=AuthResponse)
 def get_current_session(
     principal: AuthPrincipal = Depends(get_current_principal),
@@ -341,8 +402,40 @@ def get_current_session(
 ) -> AuthResponse:
     user = db.get(User, principal.user_id)
     family = db.get(Family, principal.family_id)
+
     if not user or not family:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Хэрэглэгч олдсонгүй.")
+        # If authenticated via Supabase, automatically JIT-provision initial account
+        if principal.auth_provider == "supabase":
+            user, family = _provision_supabase_family(db, principal)
+        else:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Хэрэглэгч олдсонгүй.")
+
+    token = generate_access_token(user.id, family.id)
+    return AuthResponse(
+        access_token=token,
+        user=UserOut.model_validate(user),
+        family=FamilyOut.model_validate(family),
+    )
+
+
+@app.post("/api/v1/auth/supabase/sync", response_model=AuthResponse)
+def sync_supabase_parent_profile(
+    payload: SupabaseSyncRequest,
+    principal: AuthPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> AuthResponse:
+    if principal.auth_provider != "supabase":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Энэ үйлдлийг зөвхөн Supabase нэвтрэлттэй хэрэглэгч дуудах боломжтой.",
+        )
+    user, family = _provision_supabase_family(
+        db=db,
+        principal=principal,
+        custom_family_name=payload.family_name,
+        custom_pin=payload.pin_code,
+        timezone_str=payload.timezone,
+    )
     token = generate_access_token(user.id, family.id)
     return AuthResponse(
         access_token=token,

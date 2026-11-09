@@ -41,6 +41,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class SupabaseSyncRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, max_length=120)
+    family_name: Optional[str] = Field(default=None, max_length=120)
+    pin_code: Optional[str] = Field(default="2580", pattern=r"^\d{4,6}$")
+    timezone: Optional[str] = Field(default="Asia/Ulaanbaatar")
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
