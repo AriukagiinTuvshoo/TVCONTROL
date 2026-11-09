@@ -33,11 +33,11 @@ class FamilyScreenParentApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-        cardTheme: CardTheme(
+        cardTheme: const CardThemeData(
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFFE2E8F0)),
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+            side: BorderSide(color: Color(0xFFE2E8F0)),
           ),
         ),
       ),
@@ -180,12 +180,21 @@ class _AuthScreenState extends State<AuthScreen> {
         );
         widget.onAuthenticated(session);
       } else {
+        final pin = _pinController.text.trim();
+        if (pin.isEmpty) {
+          setState(() => _errorMessage = 'ТВ нээх 4-6 оронтой PIN кодоо оруулна уу.');
+          return;
+        }
+        if (!RegExp(r'^\d{4,6}$').hasMatch(pin)) {
+          setState(() => _errorMessage = 'PIN код 4-6 оронтой тоо байх ёстой.');
+          return;
+        }
         final session = await widget.apiClient.register(
           email: _emailController.text,
           password: _passwordController.text,
           fullName: _fullNameController.text,
           familyName: _familyNameController.text,
-          pinCode: _pinController.text.trim().isEmpty ? null : _pinController.text.trim(),
+          pinCode: pin,
         );
         widget.onAuthenticated(session);
       }
@@ -627,9 +636,9 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               constraints: const BoxConstraints(maxWidth: 420),
               child: Card(
                 color: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  side: const BorderSide(color: Color(0xFFE2E8F0)),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(16)),
+                  side: BorderSide(color: Color(0xFFE2E8F0)),
                 ),
                 elevation: 2,
                 child: Padding(
@@ -752,7 +761,6 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
       ),
     );
   }
-}
 }
 
 // ============================================================================
