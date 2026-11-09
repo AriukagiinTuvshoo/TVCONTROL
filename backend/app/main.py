@@ -9,7 +9,8 @@ from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
@@ -80,6 +81,7 @@ from .security import (
     sha256_hex,
     verify_secret,
 )
+from .migrations import run_migrations
 from .time_engine import (
     ScheduleWindow,
     TimeEngineInput,
@@ -88,7 +90,8 @@ from .time_engine import (
     resolve_local_datetime,
 )
 
-# Initialize database schema
+# Run database schema migrations and initialize schema
+run_migrations(engine)
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -344,7 +347,7 @@ def _provision_supabase_family(
     custom_pin: Optional[str] = None,
     timezone_str: Optional[str] = None,
 ) -> tuple[User, Family]:
-    """Idempotently provision or retrieve User and Family for a Supabase-authenticated parent."""
+    """Idempotently and concurrency-safely provision or retrieve User and Family for a Supabase parent."""
     # 1. Search existing user strictly by verified Supabase sub or primary ID
     user = db.scalar(
         select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
@@ -362,7 +365,7 @@ def _provision_supabase_family(
     if user:
         membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == user.id))
         if membership:
-            family = db.get(Family, membership.family_id)
+            family = db.scalar(select(Family).where(Family.id == membership.family_id).with_for_update())
             if family:
                 # If custom PIN explicitly provided and family PIN was unconfigured, set it
                 if custom_pin and not family.has_pin_configured:
@@ -372,11 +375,32 @@ def _provision_supabase_family(
                     db.commit()
                     db.refresh(family)
                 return user, family
+        else:
+            # User exists but membership does not exist yet (e.g. manual seed or partial migration)
+            family = db.get(Family, principal.family_id) if principal.family_id else None
+            if not family:
+                family = Family(
+                    name=custom_family_name or f"{user.full_name}-н гэр бүл",
+                    timezone=timezone_str or "Asia/Ulaanbaatar",
+                    plan_tier="FREE",
+                    pin_hash=hash_secret(custom_pin) if custom_pin else None,
+                )
+                db.add(family)
+                db.flush()
+            membership = FamilyMember(family_id=family.id, user_id=user.id, role="OWNER")
+            db.add(membership)
+            db.commit()
+            db.refresh(family)
+            return user, family
 
-    # 3. If user does not exist, provision new User linked to this Supabase sub
+    # 3. If user does not exist, provision new User and Family with race-condition collision handling
     user_email = (principal.email or f"{principal.user_id}@supabase.familyscreen.mn").lower().strip()
     user_name = principal.full_name or "Эцэг эх"
-    if not user:
+    family_name = custom_family_name or f"{user_name}-н гэр бүл"
+    pin_hash = hash_secret(custom_pin) if custom_pin else None
+    tz = timezone_str or "Asia/Ulaanbaatar"
+
+    try:
         user = User(
             id=principal.user_id,
             supabase_sub=principal.user_id,
@@ -385,33 +409,42 @@ def _provision_supabase_family(
             full_name=user_name,
         )
         db.add(user)
+
+        family = Family(
+            name=family_name,
+            timezone=tz,
+            plan_tier="FREE",
+            pin_hash=pin_hash,
+        )
+        db.add(family)
         db.flush()
 
-    # 4. Create initial Family with unconfigured PIN (None) unless explicitly provided by parent
-    family_name = custom_family_name or f"{user_name}-н гэр бүл"
-    pin_hash = hash_secret(custom_pin) if custom_pin else None
-    tz = timezone_str or "Asia/Ulaanbaatar"
-
-    family = Family(
-        name=family_name,
-        timezone=tz,
-        plan_tier="FREE",
-        pin_hash=pin_hash,
-    )
-    db.add(family)
-    db.flush()
-
-    # 5. Associate membership as OWNER
-    membership = FamilyMember(
-        family_id=family.id,
-        user_id=user.id,
-        role="OWNER",
-    )
-    db.add(membership)
-    db.commit()
-    db.refresh(user)
-    db.refresh(family)
-    return user, family
+        membership = FamilyMember(
+            family_id=family.id,
+            user_id=user.id,
+            role="OWNER",
+        )
+        db.add(membership)
+        db.commit()
+        db.refresh(user)
+        db.refresh(family)
+        return user, family
+    except IntegrityError:
+        # Concurrent request already committed the user or membership
+        db.rollback()
+        existing_user = db.scalar(
+            select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
+        )
+        if existing_user:
+            m = db.scalar(select(FamilyMember).where(FamilyMember.user_id == existing_user.id))
+            if m:
+                existing_family = db.get(Family, m.family_id)
+                if existing_family:
+                    return existing_user, existing_family
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Зэрэгцээ хүсэлтийн зөрчил гарлаа. Түр хүлээгээд дахин оролдоно уу.",
+        )
 
 
 @app.get("/api/v1/auth/me", response_model=AuthResponse)
@@ -495,7 +528,8 @@ def link_supabase_account(
         )
 
     norm_email = principal.email.lower().strip()
-    local_user = db.scalar(select(User).where(User.email == norm_email))
+    # Acquire row-level lock on the target local user to serialize concurrent link requests
+    local_user = db.scalar(select(User).where(User.email == norm_email).with_for_update())
     if not local_user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -514,9 +548,31 @@ def link_supabase_account(
             detail="Дотоод хэрэглэгчийн нууц үг буруу байна.",
         )
 
-    local_user.supabase_sub = principal.user_id
-    db.commit()
-    db.refresh(local_user)
+    # Atomic conditional update prevents race conditions when concurrent requests attempt to link
+    res = db.execute(
+        update(User)
+        .where(
+            User.id == local_user.id,
+            (User.supabase_sub.is_(None)) | (User.supabase_sub == principal.user_id),
+        )
+        .values(supabase_sub=principal.user_id)
+    )
+    if res.rowcount == 0:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Энэ бүртгэл аль хэдийн өөр Supabase данстай холбогдсон байна.",
+        )
+
+    try:
+        db.commit()
+        db.refresh(local_user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Энэ Supabase данс аль хэдийн өөр бүртгэлтэй холбогдсон байна.",
+        )
 
     membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == local_user.id))
     if not membership:
@@ -546,9 +602,11 @@ def initialize_family_pin(
     principal: AuthPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> PinUpdateResponse:
-    """Explicitly initialize the parent PIN for a newly created family (owner only)."""
+    """Explicitly initialize the parent PIN for a newly created family (owner only, concurrency-safe)."""
     ensure_family_access(principal, family_id, db=db)
-    family = db.get(Family, family_id)
+    
+    # Acquire row-level lock on Family row to serialize concurrent init calls
+    family = db.scalar(select(Family).where(Family.id == family_id).with_for_update())
     if not family:
         raise HTTPException(status_code=404, detail="Гэр бүл олдсонгүй.")
 
@@ -566,7 +624,7 @@ def initialize_family_pin(
     if not membership or membership.role != "OWNER":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Зөвхөн гэр бүлийн админ PIN анх тохируулах эрхтэй.",
+            detail="Зөвхөн гэр бүлийн эзэмшигч (OWNER) PIN код анх тохируулах эрхтэй.",
         )
 
     if family.has_pin_configured:
@@ -575,9 +633,25 @@ def initialize_family_pin(
             detail="PIN код аль хэдийн тохируулагдсан байна. Шинэчлэхийн тулд одоогийн PIN кодоо ашиглана уу.",
         )
 
-    family.pin_hash = hash_secret(payload.new_pin)
-    family.pin_failed_attempts = 0
-    family.pin_locked_until = None
+    # Atomic conditional update prevents concurrent initialization race condition
+    res = db.execute(
+        update(Family)
+        .where(
+            Family.id == family_id,
+            (Family.pin_hash.is_(None)) | (Family.pin_hash == ""),
+        )
+        .values(
+            pin_hash=hash_secret(payload.new_pin),
+            pin_failed_attempts=0,
+            pin_locked_until=None,
+        )
+    )
+    if res.rowcount == 0:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="PIN код аль хэдийн тохируулагдсан байна. Шинэчлэхийн тулд одоогийн PIN кодоо ашиглана уу.",
+        )
     db.commit()
 
     return PinUpdateResponse(
@@ -593,11 +667,31 @@ def update_family_pin(
     principal: AuthPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> PinUpdateResponse:
-    """Update existing parent PIN requiring current PIN verification and rate-limiting lockout."""
+    """Update existing parent PIN requiring OWNER role, current PIN verification, and rate-limiting lockout."""
     ensure_family_access(principal, family_id, db=db)
-    family = db.get(Family, family_id)
+    
+    # Acquire row-level lock on Family row to prevent race conditions during updates & lockout increments
+    family = db.scalar(select(Family).where(Family.id == family_id).with_for_update())
     if not family:
         raise HTTPException(status_code=404, detail="Гэр бүл олдсонгүй.")
+
+    # Role check: Require OWNER role consistent with PRD FR-01 and FR-07
+    db_user = db.scalar(
+        select(User).where((User.supabase_sub == principal.user_id) | (User.id == principal.user_id))
+    )
+    effective_user_id = db_user.id if db_user else principal.user_id
+
+    membership = db.scalar(
+        select(FamilyMember).where(
+            FamilyMember.family_id == family_id,
+            FamilyMember.user_id == effective_user_id,
+        )
+    )
+    if not membership or membership.role != "OWNER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Зөвхөн гэр бүлийн эзэмшигч (OWNER) PIN код өөрчлөх эрхтэй.",
+        )
 
     if not family.has_pin_configured:
         raise HTTPException(
