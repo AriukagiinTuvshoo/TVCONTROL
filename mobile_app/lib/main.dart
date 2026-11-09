@@ -316,10 +316,10 @@ class _AuthScreenState extends State<AuthScreen> {
                         style: const TextStyle(color: Colors.black54),
                       ),
                       const SizedBox(height: 8),
-                      Text(
+                      const Text(
                         'API: ${AppEnv.apiBaseUrl}',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           color: Colors.black38,
                         ),

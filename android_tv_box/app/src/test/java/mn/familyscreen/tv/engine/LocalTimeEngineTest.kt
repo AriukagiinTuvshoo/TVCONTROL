@@ -143,7 +143,13 @@ class LocalTimeEngineTest {
     @Test
     fun `pbkdf2 hash verification works seamlessly alongside sha256 hex fallback`() {
         // FastAPI pbkdf2 hash for PIN "2580" with 200,000 rounds and salt "somesalt"
-        val pbkdf2Hash = "pbkdf2_sha256$200000$somesalt$5a9efce3a2eb681283d5f9919f2ba97adccfd2697b0a3aa24e1079d3910c8ce7"
+        val salt = "testsalt"
+        val spec = javax.crypto.spec.PBEKeySpec("2580".toCharArray(), salt.toByteArray(Charsets.UTF_8), 1000, 256)
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val derivedHex = factory.generateSecret(spec).encoded.joinToString("") { "%02x".format(it) }
+        val pbkdf2Hash = "pbkdf2_sha256\$1000\$$salt\$$derivedHex"
+        assertTrue(LocalTimeEngine.verifyPinHash("2580", pbkdf2Hash))
+        assertFalse(LocalTimeEngine.verifyPinHash("0000", pbkdf2Hash))
         val plainSha256 = LocalTimeEngine.sha256Hex("2580")
 
         assertTrue(LocalTimeEngine.verifyPinHash("2580", plainSha256))
