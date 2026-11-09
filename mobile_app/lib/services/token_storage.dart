@@ -11,6 +11,8 @@ class AuthSessionData {
     required this.familyId,
     required this.familyName,
     required this.planTier,
+    this.refreshToken,
+    this.expiresAtMs,
   });
 
   final String accessToken;
@@ -20,6 +22,13 @@ class AuthSessionData {
   final String familyId;
   final String familyName;
   final String planTier;
+  final String? refreshToken;
+  final int? expiresAtMs;
+
+  bool get isExpired {
+    if (expiresAtMs == null) return false;
+    return DateTime.now().millisecondsSinceEpoch >= expiresAtMs!;
+  }
 }
 
 abstract class TokenStorage {

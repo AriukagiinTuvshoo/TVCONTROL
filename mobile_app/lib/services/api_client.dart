@@ -171,6 +171,38 @@ class FamilyScreenApiClient {
     }
   }
 
+  /// Syncs or updates initial family details for a Supabase-authenticated parent.
+  Future<AuthSessionData> syncSupabaseProfile({
+    String? familyName,
+    String? pinCode,
+    String? timezone,
+  }) async {
+    try {
+      final response = await _http.post(
+        _uri('/api/v1/auth/supabase/sync'),
+        headers: await _buildHeaders(authenticated: true),
+        body: jsonEncode({
+          if (familyName != null) 'family_name': familyName,
+          if (pinCode != null) 'pin_code': pinCode,
+          if (timezone != null) 'timezone': timezone,
+        }),
+      );
+      if (response.statusCode != 200) {
+        _throwFromResponse(response);
+      }
+      final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final session = _parseAuthResponse(data);
+      await _storage.saveSession(session);
+      return session;
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw const ApiException(
+        'Supabase бүртгэлийг системтэй холбоход сүлжээний алдаа гарлаа.',
+      );
+    }
+  }
+
   Future<void> logout() async {
     await _storage.clearSession();
   }
