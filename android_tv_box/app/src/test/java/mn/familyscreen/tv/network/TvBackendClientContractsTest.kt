@@ -103,7 +103,7 @@ class TvBackendClientContractsTest {
             put("weekend_bonus_minutes", 30)
             put("enforce_whitelist", true)
             put("is_instant_locked", false)
-            put("pin_hash", "pbkdf2_sha256$200000$salt$hash")
+            put("pin_hash", "pbkdf2_sha256\$200000\$salt\$hash")
             put("server_time_utc", "2026-11-09T10:00:00Z")
 
             val timeStateObj = JSONObject().apply {

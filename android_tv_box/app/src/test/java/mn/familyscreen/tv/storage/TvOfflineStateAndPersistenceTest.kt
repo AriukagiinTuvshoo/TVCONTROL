@@ -39,7 +39,7 @@ class TvOfflineStateAndPersistenceTest {
             warningThresholdsMinutes = listOf(15, 5, 1),
             enforceWhitelist = true,
             isInstantLocked = false,
-            pinHash = "pbkdf2_sha256$200000$salt$hash",
+            pinHash = "pbkdf2_sha256\$200000\$salt\$hash",
             serverTimeUtcMs = 1731146400000L,
             anchorElapsedRealtimeMs = 50_000L,
             schedules = listOf(
