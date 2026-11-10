@@ -103,34 +103,39 @@ FamilyScreen төслийн анхны хувилбар (Phase 1–10.1) нь An
 
 ---
 
-## 4. Гол Функц: Дууны Дээд Хязгаар Тогтоох ба Түгжих (Volume Max Cap)
+## 4. Гол Функц: Дууны Дээд Хязгаар Тогтоох (Volume Max Cap) ба Техникийн Хязгаарлалтууд
 
 Хүүхдүүд зурагт үзэхдээ дууг нь 70–100% болгон чангалж, сонсголоо гэмтээх болон гэрийн амгалан тайван байдлыг алдагдуулдаг.
 
-### Volume Cap Enforcer Логик:
+### 4.1. Платформын бодит боломжууд (Feasibility Audit Findings):
+- **LG webOS (Хариу үйлдэлтэй хяналт):** `ssap://audio/getVolume` subscription-аар пультээр дуу өөрчлөгдөх эвентийг локал WebSocket-ээр шуурхай хүлээн авч, `setVolume(cap)` илгээж буцаан татах боломжтой. Сүлжээний хоцрогдол ~150-300ms байх бөгөөд хүүхэд VOL+ товч дээр хуруугаа салгахгүй дарсан үед дуу өсөж, эргэн буурах чичиргээ (volume bouncing) ажиглагдана.
+- **Samsung Tizen (Локал WebSocket):** Локал холболт нь зөвхөн `KEY_VOLDOWN` товчлуур илгээдэг, одоогийн дууны хувийг унших боломжгүй тул локал сүлжээгээр шууд дууны хувийн дээд хязгаар барих боломжгүй. Харин SmartThings Cloud API ашиглавал дууг унших/бичих боломжтой боловч үүлэн хоцрогдол нь 1000–2500ms байна.
+- **FamilyScreen Android TV Box Agent:** ТВ-ийн үйлдлийн системийн түвшинд `AudioManager`-ийг шууд барьдаг тул ямар ч сүлжээний хоцрогдолгүй (0-5ms), тойрч гарахгүй төгс хязгаарлана (Tamper-Resistant).
+
+### 4.2. Reactive Volume Cap Логик (LG webOS & Gateway):
 1. Эцэг эх гар утас эсвэл компьютерээсээ **"Зочны өрөөний ТВ: Дээд дуу = 30%"** гэж тохируулан түгжинэ (`volume_locked: true`).
 2. **Local Volume Monitor Worker (Local Gateway / Mobile Companion):**
-   - LG webOS: `ssap://audio/getVolume` subscription хийж, дууны түвшний өөрчлөлтийг бодит цагт сонсоно.
-   - Samsung Tizen: 1-2 секунд тутамд эсвэл түлхүүр дарагдсаны дараа одоогийн түвшнийг хянана.
-3. Хэрэв хүүхэд ТВ-ийн бодит удирдлагаар дууг 30%-иас ихэсгэж 50% болговол:
-   - FamilyScreen модуль **150 миллисекундын дотор** `ssap://audio/setVolume(30)` эсвэл `KEY_VOLDOWN` илгээж автоматаар буцааж 30% руу татна!
+   - LG webOS: `ssap://audio/getVolume` (`subscribe: true`) хийж, дууны түвшний өөрчлөлтийг сонсоно.
+3. Хэрэв хүүхэд ТВ-ийн бодит пультээр дууг 30%-иас ихэсгэж 50% болговол:
+   - Монитор модуль WebSocket-ээр `ssap://audio/setVolume(30)` илгээж автоматаар буцааж 30% руу татна (Reactive Rollback).
    - Эцэг эхийн утсанд "Дууны дээд хязгаар хамгаалагдлаа" мэдэгдэл илгээнэ.
+   - *Анхааруулга:* Хэрэв эцэг эхийн утас background горимд орж унтарвал (iOS background socket kill), гэрийн дотоод сүлжээнд байнга асаалттай Local Gateway байхгүй бол сүлжээний хяналт зогсоно.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Child as Хүүхэд (Бодит пульт)
-    participant TV as Smart TV (LG / Samsung / Android)
-    participant Enforcer as FamilyScreen Volume Enforcer
+    participant TV as LG Smart TV (webOS)
+    participant Enforcer as Local Gateway / Companion
     actor Parent as Эцэг эх (Flutter / Web)
 
-    Parent->>Enforcer: Дууны дээд хязгаар тогтоох (Max Cap = 35%)
-    Child->>TV: Пультний VOL+ дарж 60% болгов
-    TV-->>Enforcer: Volume Change Event (Volume = 60%)
-    Note over Enforcer: Шалгалт: 60% > Max Cap (35%)!
-    Enforcer->>TV: Send Command: setVolume(35)
-    TV-->>TV: Дуу шууд 35% руу буцав
-    Enforcer-->>Parent: Push Notification: "Хүүхэд дуу чангалсныг 35%-д буцаан барив"
+    Parent->>Enforcer: Дууны дээд хязгаар тогтоох (Max Cap = 30%)
+    Child->>TV: Пультний VOL+ дарж 50% болгов
+    TV-->>Enforcer: SSAP Volume Event (Volume = 50%)
+    Note over Enforcer: Шалгалт: 50% > Max Cap (30%)!
+    Enforcer->>TV: SSAP setVolume(30)
+    TV-->>TV: Дуу буцаж 30% руу татагдана (~150-300ms)
+    Enforcer-->>Parent: Push Notification: "Дууг 30%-д буцаан барив"
 ```
 
 ---

@@ -12,7 +12,7 @@
 # 1. Системийн ерөнхий архитектур (High-Level Architecture)
 
 FamilyScreen нь **Cloud-coordinated, Dual-Tier Enforcement (Серверээс удирдаж, хоёр шатлалаар төхөөрөмж дээр хэрэгжүүлдэг)** архитектуртай:
-- **1-р Түвшин (Agentless Network Layer):** ТВ дээр апп суулгахгүйгээр Wi-Fi, LAN, Wake-on-LAN, болон үйлдвэрлэгчийн албан ёсны WebSocket/REST протоколуудаар (LG webOS SSAP, Samsung Tizen Remote, Android TV Remote v2) асаах/унтраах, дууны түвшний дээд хязгаар (Volume Cap) тогтоох, апп нээх үйлдлийг удирдана.
+- **1-р Түвшин (Agentless Network Layer):** ТВ дээр апп суулгахгүйгээр Wi-Fi, LAN, Wake-on-LAN, болон үйлдвэрлэгчийн албан ёсны WebSocket/REST протоколуудаар (LG webOS SSAP, Samsung Tizen Remote, Android TV Remote v2) асаах/унтраах, алсын удирдлага хийх, болон дэмжигдсэн платформуудад дууны түвшний дээд хязгаар (Volume Cap) тогтоох, апп нээх үйлдлийг удирдана. Харин хүүхэд тойрч гарахгүй хатуу хяналт болон оффлайн түгжээнд 2-р түвшний төхөөрөмжийн Agent ажиллана.
 - **2-р Түвшин (Agent-Based Hardened Layer):** Хүүхэд дүрмийг тойрч гарахгүй байх шаардлагатай хатуу хяналтад (Android TV Box / Leanback App) 1 секундийн монотон цагтай `LocalTimeEngine`, Kiosk Launcher, App Whitelist, бүтэн дэлгэцийн түгжээг (Red Overlay) 72 цагийн оффлайн хамгаалалттай ажиллуулна.
 
 ```mermaid
@@ -587,7 +587,7 @@ PIN кодоор (TV дээр) эсвэл гар утаснаас нэмэлт �
 ```
 
 ### `PUT /api/v1/devices/{device_id}/volume-cap`
-Зурагтын дууны дээд хязгаарыг (Volume Max Cap) тогтоох ба түгжих.
+Зурагтын дууны дээд хязгаарыг (Volume Max Cap) тогтоох ба түгжих. (Тэмдэглэл: LG webOS болон FamilyScreen Box дээр шууд дэмжигдэнэ; Samsung Tizen дээр SmartThings холболт шаардагдана; бусад товчлуурт ТВ-д VolDown алхмаар тохируулна).
 - **Request:**
 ```json
 {

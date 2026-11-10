@@ -62,26 +62,29 @@ graph TD
 
 # 3. Зорилтот Платформ ба Төхөөрөмжийн Матриц
 
-| Платформ / ТВ брэнд | 1-р Түвшин: Сүлжээний удирдлага (Аппгүй) | 2-р Түвшин: Хатуу хяналт (Апп/Launcher) | Холболтын технологи |
+| Платформ / ТВ брэнд | 1-р Түвшин: Сүлжээний удирдлага (Аппгүй) | 2-р Түвшин: Хатуу хяналт (Тусгай Launcher/Agent) | Холболтын технологи |
 |---|---|---|---|
-| **Android TV / Google TV** (Sony, TCL, Mi TV, Chromecast) | Дуу, Асаах/Унтраах, D-Pad, Volume Cap | **БҮРЭН ДЭМЖИГДСЭН** (FamilyScreen Kotlin App) | Android TV Remote Protocol v2 (TLS 6466/6467) + WebSocket |
-| **FamilyScreen TV Box** (Одоогийн бэлэн шийдэл) | Дуу, Асаах/Унтраах, D-Pad | **БҮРЭН ДЭМЖИГДСЭН** (Custom Kiosk Launcher) | Local Engine + SQLite + WebSocket + REST |
-| **Samsung Smart TV (Tizen 2016+)** | Дуу, Volume Cap, Асаах/Унтраах, Launch, D-Pad | Tizen WGT Web App (Хязгаарлагдмал санbox) | Samsung WebSocket Port 8001/8002 + SmartThings API + WoL |
-| **LG Smart TV (webOS 3.0+)** | Дуу, Volume Cap, Асаах/Унтраах, Launch, D-Pad | webOS IPK App (Хязгаарлагдмал sandbox) | LG webOS SSAP WebSocket Port 3000 + WoL |
-| **Roku TV** | Дуу, Асаах/Унтраах, Апп нээх, D-Pad | Дэмжигдэхгүй (Roku sandbox) | Roku ECP (External Control Protocol HTTP POST 8060) |
+| **Android TV / Google TV** (Sony, TCL, Mi TV, Chromecast) | Дуу (Vol+/Vol-), Асаах/Унтраах, D-Pad | **БҮРЭН ДЭМЖИГДСЭН** (FamilyScreen Kotlin App) | Android TV Remote Protocol v2 (TLS 6466/6467) |
+| **FamilyScreen TV Box** (Одоогийн бэлэн шийдэл) | Дуу, Асаах/Унтраах, D-Pad | **БҮРЭН ДЭМЖИГДСЭН** (Custom Kiosk Launcher & Monotonic Engine) | Local Engine + SQLite + WebSocket + REST |
+| **Samsung Smart TV (Tizen 2016+)** | Дуу (Vol+/Vol- товчлуур), Асаах/Унтраах, Launch, D-Pad (Volume Cap зөвхөн SmartThings Cloud-аар) | Tizen WGT Web App (Хязгаарлагдмал sandbox) | Samsung WebSocket Port 8001/8002 + SmartThings API + WoL |
+| **LG Smart TV (webOS 3.0+)** | Дууны хувь тохируулах, Volume Cap, Асаах/Унтраах, Launch, D-Pad | webOS IPK App (Хязгаарлагдмал sandbox) | LG webOS SSAP WebSocket Port 3000/3001 + WoL |
+| **Roku TV** | Дуу (Vol+/Vol-), Асаах/Унтраах, Апп нээх, D-Pad | Дэмжигдэхгүй (Roku sandbox) | Roku ECP (External Control Protocol HTTP POST 8060) |
 | **Бусад Smart TV / Дэлгэц** | Дууг хаах, Media Pause, Power Off | Android TV Box залгаж ашиглах | UPnP / DLNA / HDMI-CEC / Wake-on-LAN |
 
 ---
 
 # 4. Бүтээгдэхүүний Функцийн Шаардлагууд (Functional Requirements)
 
-### 4.1. Universal Remote & Volume Management (Шинэ)
+### 4.1. Universal Remote & Volume Management (Сүлжээний түвшин)
 - **FR-12: Автомат сүлжээний төхөөрөмж илрүүлэлт (Device Discovery):** Утас эсвэл компьютер гэрийн Wi-Fi сүлжээнд байгаа Smart TV-үүдийг mDNS, SSDP, UPnP ашиглан автоматаар илрүүлж нэрээр нь жагсаана.
-- **FR-13: Дууны түвшний дээд хязгаар (Volume Max Cap):** Эцэг эх хүүхдийн зурагтын дууг дээд тал нь 30% эсвэл 40%-иас хэтрэхгүй байхаар түгжинэ. ТВ-ийн өөрийн пультээр дууг чангалсан ч систем автоматаар буцааж хязгаарт нь барина.
+- **FR-13: Дууны түвшний дээд хязгаар (Volume Max Cap - Платформоос хамааралтай):**
+  - Дэмждэг платформууд (LG webOS WebSocket, Samsung SmartThings, болон FamilyScreen TV Box) дээр дууны дээд хязгаар тогтоож, хүүхэд пультээр чангалахад буцааж хязгаарт нь татна.
+  - *Техникийн бодит байдал:* Энэ нь сүлжээний хоцрогдолтой хариу үйлдэлтэй хяналт (Reactive) тул төхөөрөмж дээрх FamilyScreen Agent шиг агшин зуурын 0-хоцрогдолтой механик түгжээ биш гэдгийг тодорхой заана.
 - **FR-14: Шууд алсын удирдлага (Universal Remote):** Утас болон PC-ээс Дуу чангалах/суллах, Хаах (Mute), Суваг/Оролт солих, D-Pad сумтай удирдлага хийх.
 - **FR-15: Алсаас Асаах ба Унтраах (Power Management):** ТВ дэмждэг бол Wake-on-LAN (WoL) болон үйлдвэрлэгчийн API-аар алсаас асаах, шөнө унтах цаг болоход автоматаар унтраах.
 
-### 4.2. Parental Digital Wellbeing & Time Engine (Суурь)
+### 4.2. Parental Digital Wellbeing & Time Engine (Хатуу хяналтын түвшин — Agent шаардана)
+*Анхааруулга: Доорх хатуу хяналтын дүрмүүд (FR-04-өөс FR-10) нь хүүхэд тойрч гарах боломжгүйгээр хэрэгжихэд төхөөрөмжийн түвшний FamilyScreen Agent (Android TV Box) шаардагдана. Апп суулгаагүй Smart TV-д зөвхөн сүлжээгээр унтраах (Power Off) болон дуу хаах (Mute) хэлбэрээр хэсэгчлэн үйлчилнэ.*
 - **FR-01: Authentication:** Эцэг эхийн бүртгэл, нууц үг сэргээх, Supabase JWT / Session удирдлага.
 - **FR-02: Child Profiles:** Хүүхдийн нэр, насны ангилал, өдрийн лимит, хувийн дүрмүүд.
 - **FR-03: Multi-Device Binding:** Нэг айл олон өрөөний олон төрлийн ТВ (Android Box + Samsung + LG)-г нэг аккаунтад холбох.
