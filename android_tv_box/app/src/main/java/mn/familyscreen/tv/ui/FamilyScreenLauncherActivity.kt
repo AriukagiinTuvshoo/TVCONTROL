@@ -34,6 +34,7 @@ import java.util.concurrent.Executors
  * - Whitelisted Apps Launcher Grid (FR-10)
  * - 15 / 5 / 1 Minute Warning Banner (FR-06)
  * - Full-screen Block Overlay when quota expires, outside schedule, or parent triggers Instant Lock (FR-04 / FR-05)
+ * - Truthful Block State Reporting via `EXTRA_BLOCK_REASON` and `EXTRA_BLOCKED_PACKAGE`
  * - Parent PIN Override (+5, +15, +30 min) with Online + Offline verification (FR-07)
  * - Correct usage counting via [UsageMonitoringService] (does NOT falsely pause when launching a child app!)
  */
@@ -53,6 +54,9 @@ class FamilyScreenLauncherActivity : Activity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private var activePairingCode: String? = null
+
+    private var activeBlockReason: String? = null
+    private var activeBlockedPackage: String? = null
 
     private val uiRefreshRunnable = object : Runnable {
         override fun run() {
@@ -77,6 +81,9 @@ class FamilyScreenLauncherActivity : Activity() {
             }
         }
         backendClient = TvBackendClient(offlineDb = offlineDb)
+
+        activeBlockReason = intent?.getStringExtra("EXTRA_BLOCK_REASON")
+        activeBlockedPackage = intent?.getStringExtra("EXTRA_BLOCKED_PACKAGE")
 
         val nowElapsed = SystemClock.elapsedRealtime()
         val restored = offlineDb.loadPolicySnapshot(nowElapsed)
@@ -283,6 +290,9 @@ class FamilyScreenLauncherActivity : Activity() {
         }
 
         pinInput.setText("")
+        activeBlockReason = null
+        activeBlockedPackage = null
+
         val eval = timeEngine.evaluate(nowElapsed)
         offlineDb.savePolicySnapshot(
             snapshot = timeEngine.currentSnapshot(),
@@ -315,6 +325,16 @@ class FamilyScreenLauncherActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+
+        intent?.getStringExtra("EXTRA_BLOCK_REASON")?.let { reason ->
+            if (reason.isNotBlank()) {
+                activeBlockReason = reason
+                activeBlockedPackage = intent.getStringExtra("EXTRA_BLOCKED_PACKAGE")
+                val nowElapsed = SystemClock.elapsedRealtime()
+                renderTimeEvaluation(timeEngine.evaluate(nowElapsed))
+            }
+        }
+
         intent?.getStringExtra("EXTRA_BACKEND_URL")?.let { customUrl ->
             if (customUrl.isNotBlank()) {
                 offlineDb.saveBackendBaseUrl(customUrl)
@@ -342,7 +362,7 @@ class FamilyScreenLauncherActivity : Activity() {
         // Prevent child from exiting FamilyScreen Box Launcher via BACK button when in BLOCK state
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             val eval = timeEngine.evaluate(SystemClock.elapsedRealtime())
-            if (eval.state == ScreenTimeState.BLOCK) {
+            if (eval.state == ScreenTimeState.BLOCK || activeBlockReason == "UNAUTHORIZED_APP") {
                 return true
             }
         }
@@ -360,6 +380,24 @@ class FamilyScreenLauncherActivity : Activity() {
             remSec
         )
 
+        // 1. Explicit enforcement override (Unauthorized app or missing permission)
+        val blockReason = activeBlockReason
+        if (blockReason == "UNAUTHORIZED_APP") {
+            val pkg = activeBlockedPackage ?: "Тодорхойгүй"
+            warningBannerText.text = "АНХААРУУЛГА: Зөвшөөрөгдөөгүй апп хаагдлаа!"
+            blockReasonText.visibility = View.VISIBLE
+            blockReasonText.text = "ХОРИГЛОГДСОН: '$pkg' апп зөвшөөрлийн жагсаалтад байхгүй байна. Зөвхөн зөвшөөрөгдсөн аппуудаас сонгоно уу."
+            appsContainer.visibility = View.VISIBLE
+            return
+        } else if (blockReason == "PERMISSION_MISSING") {
+            warningBannerText.text = "АНХААРУУЛГА: Системийн эрх шаардлагатай!"
+            blockReasonText.visibility = View.VISIBLE
+            blockReasonText.text = "ТВ-ийн тохиргооноос FamilyScreen-д 'Usage Access' (Хэрэглээний хандалт) зөвшөөрлийг олгоно уу."
+            appsContainer.visibility = View.VISIBLE
+            return
+        }
+
+        // 2. Normal screen time evaluation
         when (eval.state) {
             ScreenTimeState.ALLOW -> {
                 warningBannerText.text = "Төлөв: ALLOW — Зөвшөөрөгдсөн аппуудыг үзэх боломжтой."
@@ -396,6 +434,11 @@ class FamilyScreenLauncherActivity : Activity() {
             Toast.makeText(this, "Энэ апп зөвшөөрөгдсөн жагсаалтад (Whitelist) байхгүй байна.", Toast.LENGTH_LONG).show()
             return
         }
+
+        // Clear previous block notification when explicitly launching an authorized app
+        activeBlockReason = null
+        activeBlockedPackage = null
+
         val launchIntent: Intent? = packageManager.getLaunchIntentForPackage(packageName)
         if (launchIntent != null) {
             startActivity(launchIntent)

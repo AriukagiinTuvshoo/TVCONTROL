@@ -1,9 +1,11 @@
 package mn.familyscreen.tv.service
 
+import android.app.AppOpsManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -16,9 +18,13 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import mn.familyscreen.tv.engine.AllowedAppEntry
+import mn.familyscreen.tv.engine.EnforcementDecision
+import mn.familyscreen.tv.engine.ForegroundDetectionState
 import mn.familyscreen.tv.engine.LocalPolicySnapshot
 import mn.familyscreen.tv.engine.LocalTimeEngine
 import mn.familyscreen.tv.engine.ScreenTimeState
+import mn.familyscreen.tv.engine.UsageEventRecord
+import mn.familyscreen.tv.engine.UsageEventStateMachine
 import mn.familyscreen.tv.network.TvBackendClient
 import mn.familyscreen.tv.storage.QueuedUsageSession
 import mn.familyscreen.tv.storage.TvOfflineDatabase
@@ -30,20 +36,21 @@ import java.util.concurrent.Executors
 /**
  * Background / Foreground Enforcement Service for FamilyScreen Box.
  *
- * Solves the Activity `onPause()` pitfall & adheres to Android 14 (API 34) Foreground Service Rules:
+ * Implements Chronological UsageEvents State Machine Monitoring:
  * - Runs as a foreground service with `FOREGROUND_SERVICE_TYPE_SPECIAL_USE` on API 34.
- * - Continues monitoring when the child leaves Launcher to watch whitelisted apps (e.g. YouTube Kids).
- * - Checks `PowerManager.isInteractive` and foreground package via `UsageStatsManager`.
- * - Counts active viewing seconds ONLY when a whitelisted content app is in the foreground and screen is on.
- * - Enforces midnight rollover, persistent offline clock continuity, and offline policy expiration.
- * - Immediately brings [FamilyScreenLauncherActivity] to the front with BLOCK / WARNING state if
- *   an unauthorized app is opened or screen time expires.
+ * - Ingests `UsageEvents` (ACTIVITY_RESUMED/MOVE_TO_FOREGROUND and ACTIVITY_PAUSED/MOVE_TO_BACKGROUND).
+ * - Tracks multi-activity packages without false background dropouts.
+ * - Exempts System UI (volume panel, input methods, Katniss) from unauthorized blocks.
+ * - Rate-limits enforcement requests to eliminate infinite intent loops.
+ * - Counts active viewing seconds ONLY when a whitelisted content app is active in foreground and screen is on.
+ * - Enforces midnight rollover, persistent offline clock continuity, and 72-hour offline policy expiration.
  */
 class UsageMonitoringService : Service() {
 
     private lateinit var offlineDb: TvOfflineDatabase
     private lateinit var backendClient: TvBackendClient
     private lateinit var timeEngine: LocalTimeEngine
+    private lateinit var stateMachine: UsageEventStateMachine
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newSingleThreadExecutor()
@@ -52,21 +59,77 @@ class UsageMonitoringService : Service() {
     private var activeSessionStartIso: String? = null
     private var activeSessionSeconds: Int = 0
     private var ticksSinceLastServerSync: Int = 0
+    private var lastQueryTimestamp: Long = 0L
+    private var lastEnforcedPackage: String? = null
+    private var lastEnforcedTimestampMs: Long = 0L
 
     private val monitorRunnable = object : Runnable {
         override fun run() {
             val nowElapsed = SystemClock.elapsedRealtime()
+            val nowWall = System.currentTimeMillis()
             val isInteractive = isScreenInteractive()
-            val fgPackage = resolveForegroundPackage() ?: activeSessionPackage
+            stateMachine.setScreenInteractive(isInteractive)
 
+            // 1. Verify Usage Access Permission (PACKAGE_USAGE_STATS via AppOps)
+            val hasUsagePermission = checkUsageStatsPermission()
+            val detectionState = if (!hasUsagePermission) {
+                ForegroundDetectionState.PermissionMissing
+            } else {
+                pollUsageEvents(nowWall)
+                stateMachine.evaluateCurrentState()
+            }
+
+            // 2. Evaluate Enforcement Decision via State Machine
+            val (decision, activeContentPackage) = stateMachine.evaluateEnforcement(
+                detectionState = detectionState,
+                isPackageAllowed = { timeEngine.isPackageAllowed(it) },
+                isTimeLimitBlocked = {
+                    val currentEval = timeEngine.evaluate(nowElapsed)
+                    currentEval.state == ScreenTimeState.BLOCK
+                },
+                timeLimitBlockReason = {
+                    val currentEval = timeEngine.evaluate(nowElapsed)
+                    currentEval.reason
+                },
+                nowElapsedMs = nowElapsed,
+                lastEnforcedPackage = lastEnforcedPackage,
+                lastEnforcedTimestampMs = lastEnforcedTimestampMs,
+                throttleWindowMs = 2000L
+            )
+
+            // 3. Act on Decision (Takeover launcher or prompt permission)
+            when (decision) {
+                is EnforcementDecision.EnforceBlock -> {
+                    if (decision.shouldTriggerLaunch) {
+                        lastEnforcedPackage = decision.blockedPackage
+                        lastEnforcedTimestampMs = nowElapsed
+                        bringLauncherToFront(decision.reason, decision.blockedPackage)
+                    }
+                }
+                is EnforcementDecision.RequestPermission -> {
+                    // Prompt parent to grant permission, throttle to once every 10 seconds
+                    if ((nowElapsed - lastEnforcedTimestampMs) > 10_000L) {
+                        lastEnforcedTimestampMs = nowElapsed
+                        bringLauncherToFront("PERMISSION_MISSING", null)
+                    }
+                }
+                else -> {
+                    // Clear last enforced package after leaving the blocked app
+                    if (lastEnforcedPackage != null && (nowElapsed - lastEnforcedTimestampMs) > 5000L) {
+                        lastEnforcedPackage = null
+                    }
+                }
+            }
+
+            // 4. Tick Active Viewing Seconds in LocalTimeEngine
             val eval = timeEngine.tickActiveViewingSeconds(
                 deltaSeconds = 1,
                 currentElapsedRealtimeMs = nowElapsed,
-                foregroundPackage = fgPackage,
+                foregroundPackage = activeContentPackage,
                 isScreenInteractive = isInteractive
             )
 
-            // Persist updated usage and trusted clock anchor locally every 5 seconds
+            // 5. Persist updated usage and trusted clock anchor locally every 5 seconds
             if (eval.usedSecondsToday % 5 == 0) {
                 offlineDb.savePolicySnapshot(
                     snapshot = timeEngine.currentSnapshot(),
@@ -78,11 +141,11 @@ class UsageMonitoringService : Service() {
                 )
             }
 
-            // Track active content session for batch sync
-            if (isInteractive && fgPackage != null && fgPackage != packageName && timeEngine.isPackageAllowed(fgPackage)) {
-                if (activeSessionPackage != fgPackage) {
+            // 6. Track active content session for batch backend sync
+            if (isInteractive && activeContentPackage != null && timeEngine.isPackageAllowed(activeContentPackage)) {
+                if (activeSessionPackage != activeContentPackage) {
                     flushActiveSessionSegment()
-                    activeSessionPackage = fgPackage
+                    activeSessionPackage = activeContentPackage
                     activeSessionStartIso = Instant.ofEpochMilli(
                         timeEngine.computeTrustedUtcMs(nowElapsed)
                     ).toString()
@@ -96,17 +159,7 @@ class UsageMonitoringService : Service() {
                 flushActiveSessionSegment()
             }
 
-            // Enforce Whitelist or Screen Time Block by bringing Launcher to foreground
-            val unauthorizedAppOpen = isInteractive &&
-                fgPackage != null &&
-                fgPackage != packageName &&
-                !timeEngine.isPackageAllowed(fgPackage)
-
-            if (unauthorizedAppOpen || (isInteractive && eval.state == ScreenTimeState.BLOCK && fgPackage != packageName)) {
-                bringLauncherToFront(eval.reason)
-            }
-
-            // Periodic server sync & offline queue drain every 30 seconds
+            // 7. Periodic server sync & offline queue drain every 30 seconds
             ticksSinceLastServerSync += 1
             if (ticksSinceLastServerSync >= 30) {
                 ticksSinceLastServerSync = 0
@@ -123,6 +176,8 @@ class UsageMonitoringService : Service() {
 
         offlineDb = TvOfflineDatabase(this)
         backendClient = TvBackendClient(offlineDb = offlineDb)
+        stateMachine = UsageEventStateMachine(ownPackageName = packageName)
+        lastQueryTimestamp = System.currentTimeMillis() - 300_000L // 5-minute historical lookback on startup
 
         val nowElapsed = SystemClock.elapsedRealtime()
         val restored = offlineDb.loadPolicySnapshot(nowElapsed)
@@ -256,19 +311,69 @@ class UsageMonitoringService : Service() {
         return pm?.isInteractive ?: true
     }
 
-    private fun resolveForegroundPackage(): String? {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return null
-        val end = System.currentTimeMillis()
-        val start = end - 10_000L
-        val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
-        if (stats.isNullOrEmpty()) return null
-        return stats.maxByOrNull { it.lastTimeUsed }?.packageName
+    /**
+     * Checks if PACKAGE_USAGE_STATS permission is granted in AppOps.
+     */
+    private fun checkUsageStatsPermission(): Boolean {
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(),
+                packageName
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                android.os.Process.myUid(),
+                packageName
+            )
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun bringLauncherToFront(blockReason: String) {
+    /**
+     * Incremental query of Android UsageEvents using a bounded sliding window with safety overlap.
+     */
+    private fun pollUsageEvents(nowWall: Long) {
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager ?: return
+        val start = (lastQueryTimestamp - 2000L).coerceAtLeast(nowWall - 300_000L)
+        val end = nowWall
+        lastQueryTimestamp = nowWall
+
+        val usageEvents = try {
+            usm.queryEvents(start, end)
+        } catch (_: Exception) {
+            null
+        } ?: return
+
+        val eventList = mutableListOf<UsageEventRecord>()
+        val ev = UsageEvents.Event()
+        while (usageEvents.hasNextEvent()) {
+            usageEvents.getNextEvent(ev)
+            val pkg = ev.packageName
+            if (!pkg.isNullOrBlank()) {
+                eventList.add(
+                    UsageEventRecord(
+                        packageName = pkg,
+                        className = ev.className,
+                        eventType = ev.eventType,
+                        timestamp = ev.timeStamp
+                    )
+                )
+            }
+        }
+        stateMachine.processEvents(eventList)
+    }
+
+    private fun bringLauncherToFront(blockReason: String, blockedPackage: String? = null) {
         val launchIntent = Intent(this, FamilyScreenLauncherActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             putExtra("EXTRA_BLOCK_REASON", blockReason)
+            if (!blockedPackage.isNullOrBlank()) {
+                putExtra("EXTRA_BLOCKED_PACKAGE", blockedPackage)
+            }
         }
         startActivity(launchIntent)
     }
