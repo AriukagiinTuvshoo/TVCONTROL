@@ -30,3 +30,4 @@ local.properties
 .idea/
 .vscode/
 .DS_Store
+build_output/

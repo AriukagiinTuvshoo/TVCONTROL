@@ -367,10 +367,13 @@ def _provision_supabase_family(
     if not user and principal.email:
         existing_by_email = db.scalar(select(User).where(User.email == principal.email.lower().strip()))
         if existing_by_email:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="ACCOUNT_LINKING_REQUIRED: Энэ имэйл хаягтай дотоод хэрэглэгчийн бүртгэл байна. Нууц үгээ баталгаажуулж дансаа холбоно уу.",
-            )
+            if existing_by_email.supabase_sub == principal.user_id or existing_by_email.id == principal.user_id:
+                user = existing_by_email
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="ACCOUNT_LINKING_REQUIRED: Энэ имэйл хаягтай дотоод хэрэглэгчийн бүртгэл байна. Нууц үгээ баталгаажуулж дансаа холбоно уу.",
+                )
 
     if user:
         membership = db.scalar(select(FamilyMember).where(FamilyMember.user_id == user.id))

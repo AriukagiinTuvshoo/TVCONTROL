@@ -488,6 +488,62 @@ def test_concurrent_jit_provisioning_race_condition(client: TestClient):
     db.close()
 
 
+def test_jit_provisioning_idempotency_and_takeover_prevention(client: TestClient):
+    """Verify that when user exists with matching email and identical supabase_sub,
+    _provision_supabase_family returns existing user without 409 conflict,
+    while a mismatched sub with existing email raises 409 ACCOUNT_LINKING_REQUIRED."""
+    from fastapi import HTTPException
+    from app.main import _provision_supabase_family
+    from app.security import AuthPrincipal
+
+    db = client.TestingSession()
+    # 1. Create a user who already has a supabase_sub
+    u = User(
+        id="sub-match-user-1",
+        supabase_sub="sub-match-user-1",
+        email="submatch@familyscreen.mn",
+        password_hash="supabase_managed_auth",
+        full_name="Matching Sub Parent",
+    )
+    db.add(u)
+    f = Family(name="Matching Family", plan_tier="FREE")
+    db.add(f)
+    db.flush()
+    m = FamilyMember(family_id=f.id, user_id=u.id, role="OWNER")
+    db.add(m)
+    db.commit()
+
+    # 2. Case: legitimate call with matching sub -> succeeds without 409
+    import time
+    now_ts = int(time.time())
+    principal_legit = AuthPrincipal(
+        user_id="sub-match-user-1",
+        family_id="",
+        issued_at=now_ts,
+        auth_provider="supabase",
+        email="submatch@familyscreen.mn",
+        full_name="Matching Sub Parent",
+    )
+    user_ret, fam_ret = _provision_supabase_family(db, principal_legit)
+    assert user_ret.id == "sub-match-user-1"
+    assert fam_ret.id == f.id
+
+    # 3. Case: account takeover attempt (different sub trying to claim existing email) -> 409 CONFLICT
+    principal_takeover = AuthPrincipal(
+        user_id="different-attacker-sub",
+        family_id="",
+        issued_at=now_ts,
+        auth_provider="supabase",
+        email="submatch@familyscreen.mn",
+        full_name="Attacker",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _provision_supabase_family(db, principal_takeover)
+    assert exc_info.value.status_code == 409
+    assert "ACCOUNT_LINKING_REQUIRED" in exc_info.value.detail
+    db.close()
+
+
 # ---------------------------------------------------------------------------
 # Test 5: Role Policy: OWNER vs MEMBER PIN Update Authorization
 # ---------------------------------------------------------------------------

@@ -157,6 +157,10 @@
    - Kotlin файлуудад PIN код, JWT токен, эсвэл нууц үгийн hash-ийг `Log.d` эсвэл `println`-ээр хэвлэсэн тохиолдол байхгүй нь бүрэн нотлогдсон.
 3. **Холболтын хаягийн уян хатан байдал (Configurable Backend Base URL):**
    - `TvBackendClient` нь өмнө нь хатуу `http://10.0.2.2:8000` байсныг өөрчилж, `TvOfflineDatabase.saveBackendBaseUrl()` болон Intent (`EXTRA_BACKEND_URL`), мөн TV дэлгэц дээр PIN талбарт `http://...` гэж бичих замаар бодит локал сүлжээний серверийн хаягийг (жишээ нь: `http://192.168.1.15:8000`) динамикаар тохируулах боломжтой болгов.
+4. **Backend Concurrency Bug Fix (JIT Provisioning Race Condition):**
+   - **Асуудал:** `/api/v1/auth/me` дуудах үед эхний хүсэлт хэрэглэгчийг үүсгээд commit хийх агшинд зэрэгцээ ирсэн хоёр дахь хүсэлт `User.email`-ээр шалгаж үзээд `supabase_sub == principal.user_id` байхад ч шалгалгүй шууд `409 ACCOUNT_LINKING_REQUIRED` алдаа буцаах эрсдэлтэй байсан.
+   - **Засвар:** `backend/app/main.py`-ийн `_provision_supabase_family()`-д `existing_by_email.supabase_sub == principal.user_id` эсвэл `existing_by_email.id == principal.user_id` тохиолдолд ижил хэрэглэгч гэж үзэн `user = existing_by_email` болгож үргэлжлүүлдэг болгов.
+   - **Тест:** `backend/tests/test_concurrency_and_migrations.py`-д `test_jit_provisioning_idempotency_and_takeover_prevention` автомат тест нэмэгдэж 42/42 тест 100% ногоон болсон.
 
 ---
 
