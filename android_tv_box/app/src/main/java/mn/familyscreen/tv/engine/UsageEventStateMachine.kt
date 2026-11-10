@@ -73,6 +73,15 @@ sealed class EnforcementDecision {
     ) : EnforcementDecision()
 
     /**
+     * Holding screen when foreground detection state remains Unknown past grace period.
+     * Prevents unapproved apps from running indefinitely under unresolvable detection.
+     */
+    data class EnforceHoldingScreen(
+        val reason: String = "HOLDING_UNKNOWN_STATE",
+        val shouldTriggerLaunch: Boolean
+    ) : EnforcementDecision()
+
+    /**
      * Usage Access permission missing. Prompt parent on HUD.
      */
     data class RequestPermission(val reason: String) : EnforcementDecision()
@@ -134,13 +143,15 @@ class UsageEventStateMachine(
     /**
      * Checks if a package is a system utility or framework component that must
      * NOT be blocked, but should also NOT be charged as child content viewing.
+     *
+     * Strict Vetted Package Policy (F-02 remediation):
+     * Broad wildcard substrings (.contains(".inputmethod.") / .endsWith(".ime")) are eliminated
+     * to prevent unauthorized apps from spoofing package names.
      */
     fun isSystemExempt(packageName: String): Boolean {
         if (packageName.isBlank()) return false
         if (packageName == ownPackageName) return true
-        if (systemExemptPackages.contains(packageName)) return true
-        if (packageName.contains(".inputmethod.") || packageName.endsWith(".ime")) return true
-        return false
+        return systemExemptPackages.contains(packageName)
     }
 
     fun setScreenInteractive(interactive: Boolean) {
@@ -270,6 +281,11 @@ class UsageEventStateMachine(
     /**
      * Evaluate enforcement decision given current detection state and time policy.
      * Returns Pair(Decision, activeContentPackageOrNull).
+     *
+     * Unknown-State Safety Enforcement (F-01 remediation):
+     * If detection state remains Unknown for longer than [unknownGracePeriodMs] (default 5000ms),
+     * an [EnforcementDecision.EnforceHoldingScreen] decision is triggered to prevent unauthorized
+     * applications from running indefinitely without supervision.
      */
     fun evaluateEnforcement(
         detectionState: ForegroundDetectionState,
@@ -279,7 +295,11 @@ class UsageEventStateMachine(
         nowElapsedMs: Long,
         lastEnforcedPackage: String?,
         lastEnforcedTimestampMs: Long,
-        throttleWindowMs: Long = 2000L
+        throttleWindowMs: Long = 2000L,
+        unknownSinceElapsedMs: Long? = null,
+        lastHoldingLaunchedMs: Long = 0L,
+        unknownGracePeriodMs: Long = 5000L,
+        holdingThrottleWindowMs: Long = 5000L
     ): Pair<EnforcementDecision, String?> {
         return when (detectionState) {
             is ForegroundDetectionState.PermissionMissing -> {
@@ -321,8 +341,22 @@ class UsageEventStateMachine(
                 Pair(EnforcementDecision.AllowSystemOrIdle, null)
             }
             is ForegroundDetectionState.Unknown -> {
-                // Fail-safe: do not blindly block when state is unknown, but do not bill usage either
-                Pair(EnforcementDecision.AllowSystemOrIdle, null)
+                val start = unknownSinceElapsedMs ?: nowElapsedMs
+                val elapsedInUnknown = nowElapsedMs - start
+                if (elapsedInUnknown < unknownGracePeriodMs) {
+                    // Fail-safe grace period: do not block during brief event latency, but NEVER bill usage
+                    Pair(EnforcementDecision.AllowSystemOrIdle, null)
+                } else {
+                    // Grace period exceeded: enforce holding screen to prevent unapproved apps from running indefinitely
+                    val isThrottled = (nowElapsedMs - lastHoldingLaunchedMs) < holdingThrottleWindowMs
+                    Pair(
+                        EnforcementDecision.EnforceHoldingScreen(
+                            reason = "HOLDING_UNKNOWN_STATE",
+                            shouldTriggerLaunch = !isThrottled
+                        ),
+                        null
+                    )
+                }
             }
         }
     }

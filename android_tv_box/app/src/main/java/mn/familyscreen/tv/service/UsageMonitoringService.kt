@@ -62,6 +62,9 @@ class UsageMonitoringService : Service() {
     private var lastQueryTimestamp: Long = 0L
     private var lastEnforcedPackage: String? = null
     private var lastEnforcedTimestampMs: Long = 0L
+    private var unknownSinceElapsedMs: Long? = null
+    private var lastHoldingLaunchedMs: Long = 0L
+    private var isHoldingActive: Boolean = false
 
     private val monitorRunnable = object : Runnable {
         override fun run() {
@@ -79,6 +82,20 @@ class UsageMonitoringService : Service() {
                 stateMachine.evaluateCurrentState()
             }
 
+            // Track Unknown state duration and clear holding when recovered
+            if (detectionState is ForegroundDetectionState.Unknown) {
+                if (unknownSinceElapsedMs == null) {
+                    unknownSinceElapsedMs = nowElapsed
+                }
+            } else {
+                unknownSinceElapsedMs = null
+                if (isHoldingActive && detectionState is ForegroundDetectionState.KnownForeground) {
+                    isHoldingActive = false
+                    lastHoldingLaunchedMs = 0L
+                    bringLauncherToFront("CLEAR_HOLDING", null)
+                }
+            }
+
             // 2. Evaluate Enforcement Decision via State Machine
             val (decision, activeContentPackage) = stateMachine.evaluateEnforcement(
                 detectionState = detectionState,
@@ -94,16 +111,27 @@ class UsageMonitoringService : Service() {
                 nowElapsedMs = nowElapsed,
                 lastEnforcedPackage = lastEnforcedPackage,
                 lastEnforcedTimestampMs = lastEnforcedTimestampMs,
-                throttleWindowMs = 2000L
+                throttleWindowMs = 2000L,
+                unknownSinceElapsedMs = unknownSinceElapsedMs,
+                lastHoldingLaunchedMs = lastHoldingLaunchedMs,
+                unknownGracePeriodMs = 5000L,
+                holdingThrottleWindowMs = 5000L
             )
 
-            // 3. Act on Decision (Takeover launcher or prompt permission)
+            // 3. Act on Decision (Takeover launcher, enforce holding, or prompt permission)
             when (decision) {
                 is EnforcementDecision.EnforceBlock -> {
                     if (decision.shouldTriggerLaunch) {
                         lastEnforcedPackage = decision.blockedPackage
                         lastEnforcedTimestampMs = nowElapsed
                         bringLauncherToFront(decision.reason, decision.blockedPackage)
+                    }
+                }
+                is EnforcementDecision.EnforceHoldingScreen -> {
+                    if (decision.shouldTriggerLaunch) {
+                        isHoldingActive = true
+                        lastHoldingLaunchedMs = nowElapsed
+                        bringLauncherToFront(decision.reason, null)
                     }
                 }
                 is EnforcementDecision.RequestPermission -> {

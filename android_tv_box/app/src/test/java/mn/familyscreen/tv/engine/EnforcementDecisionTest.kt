@@ -232,18 +232,189 @@ class EnforcementDecisionTest {
     }
 
     @Test
-    fun `Unknown detection state triggers fail-safe AllowSystemOrIdle with null billing package`() {
+    fun `Unknown state within grace period returns AllowSystemOrIdle with zero billing`() {
         val (decision, billingPkg) = stateMachine.evaluateEnforcement(
             detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
             isPackageAllowed = { true },
             isTimeLimitBlocked = { false },
             timeLimitBlockReason = { "NONE" },
-            nowElapsedMs = 10_000L,
+            nowElapsedMs = 12_000L,
             lastEnforcedPackage = null,
-            lastEnforcedTimestampMs = 0L
+            lastEnforcedTimestampMs = 0L,
+            unknownSinceElapsedMs = 10_000L,
+            unknownGracePeriodMs = 5000L
         )
 
         assertTrue(decision is EnforcementDecision.AllowSystemOrIdle)
         assertNull(billingPkg)
+    }
+
+    @Test
+    fun `Unknown state exceeding grace period triggers EnforceHoldingScreen with shouldTriggerLaunch true`() {
+        val (decision, billingPkg) = stateMachine.evaluateEnforcement(
+            detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
+            isPackageAllowed = { true },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 16_000L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L,
+            unknownSinceElapsedMs = 10_000L,
+            lastHoldingLaunchedMs = 0L,
+            unknownGracePeriodMs = 5000L,
+            holdingThrottleWindowMs = 5000L
+        )
+
+        assertTrue(decision is EnforcementDecision.EnforceHoldingScreen)
+        val holding = decision as EnforcementDecision.EnforceHoldingScreen
+        assertEquals("HOLDING_UNKNOWN_STATE", holding.reason)
+        assertTrue(holding.shouldTriggerLaunch)
+        assertNull(billingPkg)
+    }
+
+    @Test
+    fun `Unknown state holding screen is throttled if repeated within holding throttle window`() {
+        val (decision, billingPkg) = stateMachine.evaluateEnforcement(
+            detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
+            isPackageAllowed = { true },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 17_000L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L,
+            unknownSinceElapsedMs = 10_000L,
+            lastHoldingLaunchedMs = 15_000L, // Launched 2000ms ago, window is 5000ms
+            unknownGracePeriodMs = 5000L,
+            holdingThrottleWindowMs = 5000L
+        )
+
+        assertTrue(decision is EnforcementDecision.EnforceHoldingScreen)
+        val holding = decision as EnforcementDecision.EnforceHoldingScreen
+        assertEquals("HOLDING_UNKNOWN_STATE", holding.reason)
+        assertFalse(holding.shouldTriggerLaunch) // Throttled!
+        assertNull(billingPkg)
+    }
+
+    @Test
+    fun `holding screen launch is NOT suppressed by unauthorized-app throttle`() {
+        // An unauthorized app was enforced 500ms ago (within 2000ms unauthorized throttle)
+        val (decision, billingPkg) = stateMachine.evaluateEnforcement(
+            detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
+            isPackageAllowed = { true },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 16_000L,
+            lastEnforcedPackage = "com.unauthorized.game",
+            lastEnforcedTimestampMs = 15_500L, // 500ms ago
+            throttleWindowMs = 2000L,
+            unknownSinceElapsedMs = 10_000L,
+            lastHoldingLaunchedMs = 0L, // Never launched holding
+            unknownGracePeriodMs = 5000L,
+            holdingThrottleWindowMs = 5000L
+        )
+
+        assertTrue(decision is EnforcementDecision.EnforceHoldingScreen)
+        val holding = decision as EnforcementDecision.EnforceHoldingScreen
+        assertTrue("Holding screen must launch independently of app throttle", holding.shouldTriggerLaunch)
+        assertNull(billingPkg)
+    }
+
+    @Test
+    fun `recovery from Unknown to known allowed package restores active content and billing`() {
+        val knownAllowed = ForegroundDetectionState.KnownForeground(
+            packageName = "com.google.android.apps.youtube.kids",
+            className = "MainActivity",
+            timestamp = 16_000L,
+            activeActivityCount = 1
+        )
+
+        val (decision, billingPkg) = stateMachine.evaluateEnforcement(
+            detectionState = knownAllowed,
+            isPackageAllowed = { allowedPackages.contains(it) },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 16_000L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L
+        )
+
+        assertTrue(decision is EnforcementDecision.AllowActiveContent)
+        assertEquals("com.google.android.apps.youtube.kids", billingPkg)
+    }
+
+    @Test
+    fun `recovery from Unknown to known unauthorized package triggers immediate block`() {
+        val knownUnauthorized = ForegroundDetectionState.KnownForeground(
+            packageName = "com.zhiliaoapp.musically",
+            className = "MainActivity",
+            timestamp = 16_000L,
+            activeActivityCount = 1
+        )
+
+        val (decision, billingPkg) = stateMachine.evaluateEnforcement(
+            detectionState = knownUnauthorized,
+            isPackageAllowed = { allowedPackages.contains(it) },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 16_000L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L
+        )
+
+        assertTrue(decision is EnforcementDecision.EnforceBlock)
+        val block = decision as EnforcementDecision.EnforceBlock
+        assertEquals("UNAUTHORIZED_APP", block.reason)
+        assertEquals("com.zhiliaoapp.musically", block.blockedPackage)
+        assertTrue(block.shouldTriggerLaunch)
+        assertNull(billingPkg)
+    }
+
+    @Test
+    fun `monotonic elapsed calculation accurately triggers holding after clock advance across reset`() {
+        stateMachine.reset(0L)
+
+        // T0: Unknown starts at elapsed 50_000L
+        val (decisionT0, _) = stateMachine.evaluateEnforcement(
+            detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
+            isPackageAllowed = { true },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 50_000L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L,
+            unknownSinceElapsedMs = 50_000L,
+            unknownGracePeriodMs = 5000L
+        )
+        assertTrue(decisionT0 is EnforcementDecision.AllowSystemOrIdle)
+
+        // T1: 4999ms later -> still within grace period
+        val (decisionT1, _) = stateMachine.evaluateEnforcement(
+            detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
+            isPackageAllowed = { true },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 54_999L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L,
+            unknownSinceElapsedMs = 50_000L,
+            unknownGracePeriodMs = 5000L
+        )
+        assertTrue(decisionT1 is EnforcementDecision.AllowSystemOrIdle)
+
+        // T2: 5000ms later -> grace period expired
+        val (decisionT2, _) = stateMachine.evaluateEnforcement(
+            detectionState = ForegroundDetectionState.Unknown("NO_EVENTS_YET"),
+            isPackageAllowed = { true },
+            isTimeLimitBlocked = { false },
+            timeLimitBlockReason = { "NONE" },
+            nowElapsedMs = 55_000L,
+            lastEnforcedPackage = null,
+            lastEnforcedTimestampMs = 0L,
+            unknownSinceElapsedMs = 50_000L,
+            lastHoldingLaunchedMs = 0L,
+            unknownGracePeriodMs = 5000L
+        )
+        assertTrue(decisionT2 is EnforcementDecision.EnforceHoldingScreen)
+        assertTrue((decisionT2 as EnforcementDecision.EnforceHoldingScreen).shouldTriggerLaunch)
     }
 }

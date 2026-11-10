@@ -328,8 +328,15 @@ class FamilyScreenLauncherActivity : Activity() {
 
         intent?.getStringExtra("EXTRA_BLOCK_REASON")?.let { reason ->
             if (reason.isNotBlank()) {
-                activeBlockReason = reason
-                activeBlockedPackage = intent.getStringExtra("EXTRA_BLOCKED_PACKAGE")
+                if (reason == "CLEAR_HOLDING") {
+                    if (activeBlockReason == "HOLDING_UNKNOWN_STATE") {
+                        activeBlockReason = null
+                        activeBlockedPackage = null
+                    }
+                } else {
+                    activeBlockReason = reason
+                    activeBlockedPackage = intent.getStringExtra("EXTRA_BLOCKED_PACKAGE")
+                }
                 val nowElapsed = SystemClock.elapsedRealtime()
                 renderTimeEvaluation(timeEngine.evaluate(nowElapsed))
             }
@@ -359,10 +366,10 @@ class FamilyScreenLauncherActivity : Activity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // Prevent child from exiting FamilyScreen Box Launcher via BACK button when in BLOCK state
+        // Prevent child from exiting FamilyScreen Box Launcher via BACK button when in BLOCK or HOLDING state
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             val eval = timeEngine.evaluate(SystemClock.elapsedRealtime())
-            if (eval.state == ScreenTimeState.BLOCK || activeBlockReason == "UNAUTHORIZED_APP") {
+            if (eval.state == ScreenTimeState.BLOCK || activeBlockReason == "UNAUTHORIZED_APP" || activeBlockReason == "HOLDING_UNKNOWN_STATE") {
                 return true
             }
         }
@@ -380,7 +387,7 @@ class FamilyScreenLauncherActivity : Activity() {
             remSec
         )
 
-        // 1. Explicit enforcement override (Unauthorized app or missing permission)
+        // 1. Explicit enforcement override (Unauthorized app, missing permission, or holding screen)
         val blockReason = activeBlockReason
         if (blockReason == "UNAUTHORIZED_APP") {
             val pkg = activeBlockedPackage ?: "Тодорхойгүй"
@@ -394,6 +401,12 @@ class FamilyScreenLauncherActivity : Activity() {
             blockReasonText.visibility = View.VISIBLE
             blockReasonText.text = "ТВ-ийн тохиргооноос FamilyScreen-д 'Usage Access' (Хэрэглээний хандалт) зөвшөөрлийг олгоно уу."
             appsContainer.visibility = View.VISIBLE
+            return
+        } else if (blockReason == "HOLDING_UNKNOWN_STATE") {
+            warningBannerText.text = "АНХААРУУЛГА: Хяналтын систем түр хүлээлгэнд байна!"
+            blockReasonText.visibility = View.VISIBLE
+            blockReasonText.text = "Хяналтын системийг эхлүүлж байна. Түр хүлээнэ үү..."
+            appsContainer.visibility = View.GONE
             return
         }
 

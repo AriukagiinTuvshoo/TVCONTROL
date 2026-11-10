@@ -313,10 +313,26 @@ class UsageEventStateMachineTest {
     }
 
     @Test
-    fun `custom IME package with ime suffix is identified as exempt`() {
-        assertTrue(stateMachine.isSystemExempt("com.sohu.inputmethod.sogou"))
-        assertTrue(stateMachine.isSystemExempt("com.baidu.ime"))
-        assertFalse(stateMachine.isSystemExempt("com.rovio.angrybirds"))
+    fun `IME wildcard spoofing is strictly rejected by default system exempt policy`() {
+        // Explicitly vetted system IMEs remain exempt
+        assertTrue(stateMachine.isSystemExempt("com.android.inputmethod.latin"))
+        assertTrue(stateMachine.isSystemExempt("com.google.android.inputmethod.latin"))
+
+        // Malicious or third-party packages spoofing IME names are strictly rejected (F-02 remediation)
+        assertFalse(stateMachine.isSystemExempt("com.action.game.ime"))
+        assertFalse(stateMachine.isSystemExempt("com.evil.inputmethod.video"))
+        assertFalse(stateMachine.isSystemExempt("com.sohu.inputmethod.sogou"))
+        assertFalse(stateMachine.isSystemExempt("com.baidu.ime"))
+        assertFalse(stateMachine.isSystemExempt("com.inputmethod.hack"))
+    }
+
+    @Test
+    fun `custom system exempt packages can be provided via constructor for verified OEM keyboards`() {
+        val customExempt = UsageEventStateMachine.DEFAULT_SYSTEM_EXEMPT_PACKAGES + setOf("com.sohu.inputmethod.sogou")
+        val customMachine = UsageEventStateMachine(systemExemptPackages = customExempt)
+
+        assertTrue(customMachine.isSystemExempt("com.sohu.inputmethod.sogou"))
+        assertFalse(customMachine.isSystemExempt("com.evil.inputmethod.video"))
     }
 
     @Test
