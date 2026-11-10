@@ -3,47 +3,64 @@
 | Талбар | Утга |
 |---|---|
 | **Баримт бичиг** | 02-р үе шат: Системийн Архитектур, Өгөгдлийн сан ба API |
-| **Хувилбар** | 1.0 |
+| **Хувилбар** | 2.0 (Universal TV Control & Multi-Device Architecture) |
 | **Төлөв** | Баталгаажсан суурь загвар |
-| **Технологийн стек** | FastAPI, PostgreSQL, Supabase (Auth/Realtime), Flutter, Kotlin (Android TV/Box) |
+| **Технологийн стек** | FastAPI, PostgreSQL, Supabase (Auth/Realtime), Flutter, Web Dashboard, Kotlin (Android TV/Box), WebSockets (webOS SSAP, Tizen Remote) |
 
 ---
 
 # 1. Системийн ерөнхий архитектур (High-Level Architecture)
 
-FamilyScreen нь **Cloud-coordinated, Edge-enforced (Серверээс удирдаж, төхөөрөмж дээр шууд хэрэгжүүлдэг)** архитектуртай. Энэ нь интернэт тасарсан ч TV Box / TV App өөрийн локал Time Engine болон кэшлэгдсэн Policy-ийн дагуу хүүхдийн хугацааг 100% найдвартай хянаж, блоклох боломжийг хангана.
+FamilyScreen нь **Cloud-coordinated, Dual-Tier Enforcement (Серверээс удирдаж, хоёр шатлалаар төхөөрөмж дээр хэрэгжүүлдэг)** архитектуртай:
+- **1-р Түвшин (Agentless Network Layer):** ТВ дээр апп суулгахгүйгээр Wi-Fi, LAN, Wake-on-LAN, болон үйлдвэрлэгчийн албан ёсны WebSocket/REST протоколуудаар (LG webOS SSAP, Samsung Tizen Remote, Android TV Remote v2) асаах/унтраах, дууны түвшний дээд хязгаар (Volume Cap) тогтоох, апп нээх үйлдлийг удирдана.
+- **2-р Түвшин (Agent-Based Hardened Layer):** Хүүхэд дүрмийг тойрч гарахгүй байх шаардлагатай хатуу хяналтад (Android TV Box / Leanback App) 1 секундийн монотон цагтай `LocalTimeEngine`, Kiosk Launcher, App Whitelist, бүтэн дэлгэцийн түгжээг (Red Overlay) 72 цагийн оффлайн хамгаалалттай ажиллуулна.
 
 ```mermaid
 flowchart TD
-    subgraph ParentSide["Эцэг эхийн орчин (Flutter)"]
-        MobileApp["Parent Mobile App\n(iOS / Android)"]
+    subgraph ParentClients["Эцэг эхийн нэгдсэн удирдлага"]
+        MobileApp["Parent Mobile App\n(Flutter iOS / Android)"]
+        WebDashboard["Parent Web Dashboard\n(Next.js / PC Browser)"]
     end
 
     subgraph Cloud["Cloud Backend & Infrastructure"]
         CF["Cloudflare\n(DNS, WAF, TLS, Rate Limit)"]
-        API["FastAPI Backend\n(REST API + Time Engine Service)"]
-        WS["Realtime / WebSocket Hub\n(Supabase Realtime / FastAPI WS)"]
-        DB[("PostgreSQL\n(Primary Database)")]
-        Auth["Supabase Auth\n(JWT / User Identity)"]
+        API["FastAPI Backend\n(Universal Device Gateway & Time Engine)"]
+        WS["Realtime / WebSocket Hub\n(Device Commands & Status Sync)"]
+        DB[("PostgreSQL\n(Extended Universal Schema)")]
+        Auth["Supabase Auth\n(JWT / RS256 Verification)"]
     end
 
-    subgraph ChildSide["Хүүхдийн ТВ орчин (Kotlin)"]
-        TVBox["FamilyScreen Box / TV App\n(Custom Launcher + Local Time Engine)"]
-        LocalDB[("Room / SQLite\n(Offline Policy & Event Queue)")]
-        Whitelist["App Whitelist Guard\n(UsageStats / Accessibility)"]
+    subgraph TVTargets["Зорилтот ТВ Экосистем"]
+        subgraph Tier1["2-р Түвшин: Hardened Agent (ТВ дээрх апп)"]
+            TVBox["FamilyScreen Android Box / TV App\n(Kotlin Engine + Kiosk Launcher)"]
+            LocalDB[("Room / SQLite\n(72h Offline Storage)")]
+        end
+
+        subgraph Tier2["1-р Түвшин: Agentless Network TV (Аппгүй удирдлага)"]
+            LG["LG Smart TV\n(webOS SSAP WebSocket 3000)"]
+            Samsung["Samsung Smart TV\n(Tizen WebSocket 8001/2 & SmartThings)"]
+            AndroidRemote["Android TV Network\n(Remote Protocol v2 TLS 6467)"]
+            GenericTV["Roku & Generic Smart TV\n(ECP HTTP 8060 / DLNA / WoL)"]
+        end
     end
 
     MobileApp -->|HTTPS / REST| CF
+    WebDashboard -->|HTTPS / REST| CF
     MobileApp <-->|Realtime Events| WS
+    WebDashboard <-->|Realtime Events| WS
     CF --> API
     API --> Auth
     API --> DB
     API --> WS
-    WS <-->|Policy Push / Heartbeat / Override| TVBox
-    TVBox -->|Batch Sync / Pairing / Usage| CF
+
+    %% Tier 1 Agent Connection
+    WS <-->|Policy Snapshot / Heartbeat / PIN Override| TVBox
+    TVBox -->|Offline Batch Sync| CF
     TVBox <--> LocalDB
-    TVBox --> Whitelist
-```
+
+    %% Tier 2 Direct Local / Cloud Network Controls
+    MobileApp -.->|Local Wi-Fi Discovery / Direct Remote| Tier2
+    API -.->|LAN Gateway / Cloud Command Dispatch| Tier2
 
 ## 1.1. Бүрэлдэхүүн хэсгүүдийн үүрэг
 
@@ -135,17 +152,26 @@ erDiagram
 | `is_active` | `BOOLEAN` | `DEFAULT TRUE` | Идэвхтэй эсэх |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Үүссэн огноо |
 
-### 5. `devices` — TV болон FamilyScreen Box төхөөрөмжүүд
+### 5. `devices` — TV болон FamilyScreen Box төхөөрөмжүүд (Universal TV Extended)
 | Багана | Төрөл | Хязгаарлалт | Тайлбар |
 |---|---|---|---|
 | `id` | `UUID` | `PK` | Төхөөрөмжийн ID |
 | `family_id` | `UUID` | `FK -> families.id ON DELETE CASCADE, NULL` | Холбогдсон гэр бүл |
 | `active_child_id` | `UUID` | `FK -> children.id ON DELETE SET NULL, NULL` | Одоо үзэж буй хүүхдийн профайл |
 | `device_name` | `VARCHAR(120)` | `NOT NULL` | Төхөөрөмжийн нэр (жнь: "Зочны өрөөний ТВ") |
-| `device_type` | `VARCHAR(30)` | `NOT NULL` | `ANDROID_TV`, `FAMILYSCREEN_BOX`, `TIZEN`, `WEBOS` |
+| `device_type` | `VARCHAR(30)` | `NOT NULL` | `ANDROID_TV`, `FAMILYSCREEN_BOX`, `TIZEN`, `WEBOS`, `ROKU`, `GENERIC_SMART_TV` |
+| `connection_mode` | `VARCHAR(32)` | `NOT NULL DEFAULT 'AGENT_NATIVE'` | `AGENT_NATIVE` (ТВ дээрх апп), `NETWORK_DIRECT` (Wi-Fi/LAN удирдлага), `CLOUD_SMARTTHINGS`, `HYBRID` |
+| `network_ip` | `VARCHAR(45)` | `NULL` | ТВ-ийн орон нутгийн Wi-Fi / LAN IP хаяг (жнь: `192.168.1.105`) |
+| `mac_address` | `VARCHAR(17)` | `NULL` | Wake-on-LAN (WoL) Magic Packet-аар асаахад шаардагдах MAC хаяг |
+| `auth_token_encrypted` | `TEXT` | `NULL` | ТВ-тэй хослоход үүссэн шифрлэгдсэн түлхүүр (webOS client-key, Tizen token) |
+| `is_powered_on` | `BOOLEAN` | `NOT NULL DEFAULT FALSE` | ТВ одоо ажиллаж буй эсэх |
+| `current_volume` | `INT` | `DEFAULT 20` | Одоогийн дууны түвшин (0-100) |
+| `max_volume_cap` | `INT` | `NOT NULL DEFAULT 100` | Зөвшөөрөгдөх дууны дээд хязгаар (0-100) |
+| `volume_locked` | `BOOLEAN` | `NOT NULL DEFAULT FALSE` | Хүүхэд дууны хязгаараас хэтрүүлэхээс сэргийлж түгжсэн эсэх |
+| `supported_capabilities` | `JSONB` | `NOT NULL DEFAULT '["agent_limits"]'` | Дэмжигдэх үйлдлүүд (`["power_on", "power_off", "volume_set", "volume_cap", "mute", "app_launch", "dpad", "agent_limits"]`) |
 | `hardware_uid` | `VARCHAR(128)` | `UNIQUE, NOT NULL` | Төхөөрөмжийн давтагдашгүй таних код |
 | `device_token_hash` | `VARCHAR(255)` | `NULL` | Төхөөрөмжийн API хандалтын токены хэш |
-| `app_version` | `VARCHAR(32)` | `NOT NULL DEFAULT '1.0.0'` | Аппын хувилбар |
+| `app_version` | `VARCHAR(32)` | `NOT NULL DEFAULT '1.0.0'` | Апп эсвэл интеграцийн хувилбар |
 | `status` | `VARCHAR(20)` | `NOT NULL DEFAULT 'OFFLINE'` | `ONLINE`, `OFFLINE`, `UNPAIRED` |
 | `last_seen_at` | `TIMESTAMPTZ` | `NULL` | Сүүлд сервертэй холбогдсон цаг |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Бүртгэгдсэн огноо |
@@ -242,16 +268,30 @@ erDiagram
 |---|---|---|---|
 | `id` | `UUID` | `PK` | Мэдэгдлийн ID |
 | `family_id` | `UUID` | `FK -> families.id ON DELETE CASCADE` | Гэр бүлийн ID |
-| `type` | `VARCHAR(40)` | `NOT NULL` | `TIME_EXPIRED`, `DEVICE_OFFLINE`, `POLICY_UPDATED`, `OVERRIDE_USED`, `TIME_REQUESTED` |
+| `type` | `VARCHAR(40)` | `NOT NULL` | `TIME_EXPIRED`, `DEVICE_OFFLINE`, `POLICY_UPDATED`, `OVERRIDE_USED`, `TIME_REQUESTED`, `VOLUME_CAP_TRIGGERED` |
 | `title` | `VARCHAR(160)` | `NOT NULL` | Гарчиг (Монгол хэлээр) |
 | `body` | `TEXT` | `NOT NULL` | Дэлгэрэнгүй мэдээлэл |
 | `is_read` | `BOOLEAN` | `NOT NULL DEFAULT FALSE` | Уншсан эсэх |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Үүссэн цаг |
 
+### 14. `device_commands` — Алсын удирдлагын тушаал, дараалал ба аудит (Universal Remote Command Queue)
+| Багана | Төрөл | Хязгаарлалт | Тайлбар |
+|---|---|---|---|
+| `id` | `UUID` | `PK` | Тушаалын давтагдашгүй ID |
+| `device_id` | `UUID` | `FK -> devices.id ON DELETE CASCADE` | Зорилтот ТВ төхөөрөмж |
+| `user_id` | `UUID` | `FK -> users.id ON DELETE SET NULL, NULL` | Тушаал илгээсэн эцэг эх |
+| `command_type` | `VARCHAR(40)` | `NOT NULL` | `POWER_ON`, `POWER_OFF`, `SET_VOLUME`, `SET_VOLUME_CAP`, `MUTE`, `UNMUTE`, `LAUNCH_APP`, `DPAD_KEY`, `INSTANT_LOCK` |
+| `payload` | `JSONB` | `NOT NULL DEFAULT '{}'` | Тушаалын өгөгдөл (жнь: `{"volume": 25}`, `{"app_id": "youtube"}`) |
+| `status` | `VARCHAR(20)` | `NOT NULL DEFAULT 'PENDING'` | `PENDING`, `SENT`, `ACKNOWLEDGED`, `FAILED` |
+| `error_message` | `TEXT` | `NULL` | Амжилтгүй болсон үеийн шалтгаан |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT NOW()` | Тушаал үүссэн цаг |
+| `executed_at` | `TIMESTAMPTZ` | `NULL` | Төхөөрөмж дээр биелсэн цаг |
+
 ### 2.3. Индексжүүлэлт (Indexes for High Performance)
 - `idx_usage_sessions_child_date` ON `usage_sessions(child_id, usage_date)` — Өдрийн болон 7 хоногийн тайлан, үлдэгдэл хугацааг $O(\log N)$ хурдаар бодоход.
 - `idx_overrides_child_date` ON `overrides(child_id, override_date)` — Тухайн өдрийн нэмэлт минутыг хурдан нийлбэрлэхэд.
 - `idx_device_pairings_code` ON `device_pairings(pairing_code)` WHERE `status = 'PENDING'` — Partial index.
+- `idx_device_commands_device_status` ON `device_commands(device_id, status)` — Тушаалуудыг хурдан шүүж илгээхэд.
 - `idx_notifications_family_unread` ON `notifications(family_id, created_at DESC)` WHERE `is_read = FALSE`.
 
 ---
@@ -495,3 +535,72 @@ PIN кодоор (TV дээр) эсвэл гар утаснаас нэмэлт �
 ### `GET /api/v1/reports/summary?family_id={f-uuid}&child_id={c-uuid}&days=7`
 Өдрийн болон 7 хоногийн хэрэглээний тайлан авах.
 - **Response (`200 OK`):** Өдөр бүрийн зөвшөөрсөн хугацаа, бодит үзсэн хугацаа, апп тус бүрийн задаргаа.
+
+---
+
+## 4.5. Universal TV Remote & Volume Control API (`/devices/universal`)
+
+### `POST /api/v1/devices/discover`
+Гэрийн сүлжээнд байгаа Smart TV-үүдийг илрүүлсэн жагсаалтыг гар утас эсвэл вэбээс бүртгэх/авах.
+- **Request:**
+```json
+{
+  "family_id": "f-uuid",
+  "discovered_devices": [
+    {
+      "name": "LG OLED Living Room",
+      "platform_type": "LG_WEBOS",
+      "network_ip": "192.168.1.105",
+      "mac_address": "E4:F0:42:11:22:33"
+    },
+    {
+      "name": "Samsung QLED Bedroom",
+      "platform_type": "SAMSUNG_TIZEN",
+      "network_ip": "192.168.1.108",
+      "mac_address": "8C:11:CB:44:55:66"
+    }
+  ]
+}
+```
+- **Response (`200 OK`):** Хадгалагдсан болон шинээр бүртгэгдсэн төхөөрөмжүүдийн жагсаалт.
+
+### `POST /api/v1/devices/{device_id}/command`
+Утас эсвэл компьютерээс ТВ-д сүлжээгээр шууд тушаал (Дуу, Асаах/Унтраах, D-Pad, Апп) илгээх.
+- **Request:**
+```json
+{
+  "command_type": "SET_VOLUME",
+  "payload": {
+    "volume": 25
+  }
+}
+```
+- **Response (`202 Accepted`):**
+```json
+{
+  "command_id": "cmd-uuid-1",
+  "device_id": "d-uuid",
+  "command_type": "SET_VOLUME",
+  "status": "SENT",
+  "timestamp": "2026-11-10T09:15:00Z"
+}
+```
+
+### `PUT /api/v1/devices/{device_id}/volume-cap`
+Зурагтын дууны дээд хязгаарыг (Volume Max Cap) тогтоох ба түгжих.
+- **Request:**
+```json
+{
+  "max_volume_cap": 35,
+  "volume_locked": true
+}
+```
+- **Response (`200 OK`):**
+```json
+{
+  "device_id": "d-uuid",
+  "max_volume_cap": 35,
+  "volume_locked": true,
+  "message": "Дууны дээд хязгаарыг 35% дээр түгжлээ."
+}
+```
