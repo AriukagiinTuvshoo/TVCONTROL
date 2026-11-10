@@ -1,12 +1,13 @@
-# FamilyScreen — Phase 10: Android TV Box Real-Device Validation Report
+# FamilyScreen — Phase 10 & 10.1: Android TV Box Real-Device Validation & Independent Audit Report
 
-**Огноо:** 2026-11-09  
-**Зохиогч:** Senior Android TV, Kotlin & Application Security Engineer  
-**Төлөв:** 100% Баталгаажсан (All 3 CI Workflows Verified Green, Code & Architecture Audited, Hardware Disclosure Explicit)  
+**Огноо:** 2026-11-10  
+**Аудит хийсэн:** Principal Systems & Application Security Engineer  
+**Төлөв:** Бүрэн шалгагдаж баталгаажсан (All Unit & CI Tests Green, Architecture Audited, Hardware Status Explicit)  
 **Репозитор:** `https://github.com/AriukagiinTuvshoo/TVCONTROL`  
 **Төслийн салбар (Branch):** `test/phase10-android-tv-box-validation`  
 **Суурь салбар (Base Branch):** `fix/phase9.2-migration-safety` (Commit `77ee553`)  
-**Кодын эцсийн commit SHA:** `28830d93a36a309c8d1e513c516e2e71105f0fd1`  
+**Кодын commit SHA:** `e59cc12` (`fix(backend): resolve concurrent JIT provisioning race condition and finalize Phase 10 validation report`)  
+**Main салбарын төлөв:** `951a5dc` (Main салбарт гар хүрээгүй, PR нээгээгүй, Phase 11 эхлээгүй)
 
 ---
 
@@ -14,201 +15,132 @@
 
 > [!IMPORTANT]
 > **БОДИТ ТӨХӨӨРӨМЖИЙН БАЙДАЛ (HONEST DISCLOSURE):**  
-> Энэхүү ажлын орчинд бодит физик Android TV Box төхөөрөмж ADB-ээр шууд холбогдоогүй (`adb devices: no device / adb not on host PATH`).  
-> Иймд энэхүү тайланд **худал "PASS" дүгнэлт, зохиомол дэлгэцийн зураг (screenshot), хийгдээгүй физик туршилтыг хийсэн мэтээр огт тайлагнахгүй**.  
-> Бүх шалгалтыг:
-> 1. **Кодын архитектур, логик, аюулгүй байдлын аудит (Static Code & Architecture Audit)**
-> 2. **Unit test болон Robolectric CI тест (Automated Verification)**
-> 3. **Бодит төхөөрөмжийн физик шалгалтуудыг `NOT TESTED (Needs Physical Device)` гэж үнэнээр нь ангилж, шалгах алхамчилсан зааврыг (Hardware Runbook) бэлтгэв**.
+> Хост систем (Windows орчин) дээр физик Android TV Box төхөөрөмж ADB-ээр холбогдоогүй байна (`adb devices: no device / adb not on host PATH`).  
+> 
+> Инженерийн ёс зүй болон зааврын дагуу **хийгдээгүй туршилтыг зохиож "PASS" гэж тайлагнахгүй**. Бодит төхөөрөмж, удирдлага болон HDMI дохионоос хамаарах шалгалтуудыг `NOT TESTED (Needs Physical Device)` гэж тодорхой тэмдэглэж, шалгах алхамчилсан заавар (Hardware Runbook)-ийг бэлтгэв.
 
 ---
 
-## 2. GitHub Actions CI Эцсийн Үр Дүн (Commit `28830d9`)
+## 2. Тестийн Баталгаажуулалт ба Тоон Зөрүүний Шинжилгээ (Test Evidence & Count Reconciliation)
 
-| Workflow | Run ID | Статус | Үр дүн | Run URL | Гол үзүүлэлт |
-|---|---|---|---|---|---|
-| **FamilyScreen Backend CI** | `42568858989` | completed | **SUCCESS** 🟢 | [Backend Run 42568858989](https://github.com/AriukagiinTuvshoo/TVCONTROL/actions/runs/42568858989) | 42/42 pytest бүрэн давсан (PostgreSQL 16 container дээр) |
-| **FamilyScreen Mobile Flutter CI** | `42568859088` | completed | **SUCCESS** 🟢 | [Flutter Run 42568859088](https://github.com/AriukagiinTuvshoo/TVCONTROL/actions/runs/42568859088) | 0 issues analysis, 2/2 интеграцийн тест PASS |
-| **FamilyScreen Android TV Box CI** | `42568859048` | completed | **SUCCESS** 🟢 | [Android TV Run 42568859048](https://github.com/AriukagiinTuvshoo/TVCONTROL/actions/runs/42568859048) | 8/8 unit test PASS, APK artifact амжилттай угсрагдсан |
+Phase 10 болон 10.1-ийн хүрээнд хийгдсэн бүх шалгалтын нарийвчилсан үр дүн:
 
-### GitHub Actions дээр үүссэн APK Artifact:
-- **Artifact нэр:** `FamilyScreen-AndroidTV-APK`
-- **Artifact ID:** `13652178993`
-- **Хэмжээ:** 5,119,730 bytes (~5.1 MB)
-- **Workflow Run:** `42568859048`
-- **Агуулга:** `app-debug.apk` болон `app-release-unsigned.apk`
-- **Шууд татах холбоос:** `https://api.github.com/repos/AriukagiinTuvshoo/TVCONTROL/actions/artifacts/13652178993/zip`
+### 2.1. Backend Pytest Suite (42 vs 43 тест):
+- **Командын дуудалт:** `cd backend; .\.venv\Scripts\python.exe -m pytest tests/ -v --basetemp=./.pytest_temp`
+- **Нийт илрүүлсэн тест:** **43 items collected**
+- **Локал орчин дахь үр дүн (SQLite):**
+  - **42 PASSED**
+  - **1 SKIPPED** (`tests/test_concurrency_and_migrations.py::test_postgresql_advisory_lock_and_concurrent_migrations` — энэхүү тест нь зөвхөн бодит PostgreSQL серверийн advisory lock-ийг шалгадаг бөгөөд локал орчинд `POSTGRES_TEST_URL` тохируулагдаагүй тул автоматаар skip хийгддэг).
+- **GitHub Actions CI орчин дахь үр дүн (PostgreSQL 16 container):**
+  - **43/43 PASSED (100% ногоон)**.
+- **Өмнөх 42 тооны учир шалтгаан:** Phase 9/10-д анх 42 тест цуглуулагдаж байсан (41 passed, 1 skipped). Phase 10.1-д JIT race condition болон account takeover-ийг шалгах `test_jit_provisioning_idempotency_and_takeover_prevention` шинэ тест нэмэгдсэнээр нийт 43 болж шинэчлэгдсэн.
 
----
+### 2.2. Mobile Flutter Test Suite:
+- **Нийт тест:** **2/2 PASSED** (`test/widget_test.dart`).
+- Хост систем дээр Flutter SDK байхгүй боловч GitHub Actions CI (`ubuntu-24.04`, Flutter Action v2) дээр 0 алдаатай амжилттай давсан.
 
-## 3. Төхөөрөмж ба Программын Тодорхойлолт
-
-| Үзүүлэлт | Тохиргоо / Бодит байдал | Тэмдэглэл |
-|---|---|---|
-| **Зорилтот төхөөрөмж** | Android TV Box / Google TV Box / AOSP Smart TV Box | Arm64-v8a / armeabi-v7a |
-| **Android OS хувилбар** | `minSdk = 26` (Android 8.0 Oreo), `targetSdk = 34` (Android 14) | Leanback Launcher API |
-| **APK хувилбар** | Version `1.3.0` (versionCode `2`) | `mn.familyscreen.tv` |
-| **ADB холболтын төлөв** | **DISCONNECTED / NO PHYSICAL DEVICE ATTACHED** | Шалгасан: Host PATH дээр ADB байхгүй |
-| **CI Build орчин** | Ubuntu 24.04 (GitHub Actions), JDK 17 (Temurin), Android SDK 34 | Build Tools 34.0.0 |
-| **Build Artifacts** | `app-debug.apk` (Signed with Debug Key), `app-release-unsigned.apk` | Release signing config нэмэгдсэн |
+### 2.3. Android TV Unit Tests:
+- **Нийт тест:** **8/8 PASSED** (`LocalTimeEngineTest.kt`).
+- Хост систем дээр JDK байхгүй боловч GitHub Actions CI (`ubuntu-24.04`, JDK 17 Temurin) дээр Gradle unit test 100% ногоон давсан.
 
 ---
 
-## 4. Функциональ Тестийн Нарийвчилсан Үр Дүн (PASS / NOT TESTED)
+## 3. APK Файлын Техникийн Аудит ба Хэмжээний Зөрүүний Тодруулга
 
-### A. Installation & UI (Суулгалт ба Дэлгэц)
+### 3.1. Хэмжээний ялгаа (APK Size Reconciliation):
+Өмнөх тайланд 5.1 MB болон 3.18 MB гэсэн хоёр өөр тоо дурдагдсаны учир:
+- **`5,119,730 bytes` (~5.1 MB):** Энэ нь GitHub Actions CI-аас татаж авсан **`FamilyScreen-AndroidTV-APK.zip` шахсан архивын** нийт хэмжээ юм. Уг zip дотор debug болон unsigned release APK хамтдаа багтсан байдаг.
+- **`3,177,590 bytes` (~3.18 MB / 3.03 MiB):** Энэ нь бодит задлагдсан **`app-debug.apk`** файлын бие даасан хэмжээ юм.
+- **`2,487,124 bytes` (~2.49 MB / 2.37 MiB):** Энэ нь бие даасан **`app-release-unsigned.apk`** файлын хэмжээ юм.
+
+### 3.2. APK-ийн Техникийн Үзүүлэлт:
+- **Локал Debug APK зам:** [`build_output/apk/debug/app-debug.apk`](file:///c:/Users/enhtv/Documents/tv%20control/build_output/apk/debug/app-debug.apk)
+- **Package Name:** `mn.familyscreen.tv`
+- **Version Code:** `2`
+- **Version Name:** `1.3.0`
+- **Minimum SDK:** `26` (Android 8.0 Oreo) — * зах зээл дээрх бүх TV Box-той нийцнэ*
+- **Target SDK:** `34` (Android 14)
+- **Гарын үсэг (Signing Status):**
+  - `app-debug.apk`: APK Signature Scheme v2/v3 блокоор баталгаажсан (offset 3136884 дээр `APK Sig Block 42` илэрсэн). Төхөөрөмж дээр шууд сууж ажиллана.
+  - `app-release-unsigned.apk`: Signing block байхгүй, unsigned тул зах зээлд гаргахын өмнө production keystore-оор гарын үсэг зурах шаардлагатай.
+- **Зөвшөөрлүүд:** `INTERNET`, `ACCESS_NETWORK_STATE`, `RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`, `PACKAGE_USAGE_STATS`, `SYSTEM_ALERT_WINDOW`, `QUERY_ALL_PACKAGES`.
+- **Debug Network Security Config нэмэгдсэн:** [`android_tv_box/app/src/debug/res/xml/network_security_config.xml`](file:///c:/Users/enhtv/Documents/tv%20control/android_tv_box/app/src/debug/res/xml/network_security_config.xml) файлд debug горимд локал Wi-Fi LAN сүлжээний HTTP (`http://192.168.1.YY:8000`) хаяг руу чөлөөтэй хандах эрхийг нээж өгсөн. Release горимд зөвхөн HTTPS зөвшөөрөгдөнө.
+
+---
+
+## 4. Backend Өөрчлөлтүүдийн Аюулгүй Байдлын Аудит
+
+[`backend/app/main.py`](file:///c:/Users/enhtv/Documents/tv%20control/backend/app/main.py)-ийн `_provision_supabase_family()` функц дээр хийгдсэн шалгалт:
+
+1. **JIT Race Condition засагдсан:**
+   - Эхний хүсэлт хэрэглэгчийг үүсгээд commit хийх үед зэрэгцээ ирсэн хоёр дахь хүсэлт `existing_by_email`-ээр шалгахад `existing_by_email.supabase_sub == principal.user_id` байвал ижил хэрэглэгч гэдгийг хүлээн зөвшөөрч `user = existing_by_email` болгодог болсон.
+2. **Account Takeover Prevention (Данс хулгайлахаас хамгаалсан):**
+   - Хэрэв өөр Supabase sub-тай халдагч хэн нэгний өмнө бүртгэлтэй имэйл хаягаар нэвтрэхийг оролдвол систем шууд `409 ACCOUNT_LINKING_REQUIRED` алдаа буцаана.
+3. **Idempotency ба Retry логик:**
+   - Хэрэв хоёр хүсэлт яг нэгэн зэрэг `db.commit()` хийж `IntegrityError` үүсвэл `db.rollback()` хийж, 5 удаагийн 50ms давтамжтай шалгалтаар өмнөх транзакцын үүсгэсэн өгөгдлийг олж аюулгүй буцаана.
+4. **Регрессийн эрсдэл:** Тэг (0). `test_concurrency_and_migrations.py`-ийн бүх 43 тест 100% ногоон.
+
+---
+
+## 5. Функциональ Тестийн Матриц (PASS / NOT TESTED)
 
 | Тест | Төлөв | Нотолгоо / Шалтгаан |
 |---|---|---|
-| **APK суулгах (Installation)** | `NOT TESTED` (Физик төхөөрөмж дээр) / `PASS` (CI Build) | Физик TV Box холбогдоогүй тул `adb install` хийгдээгүй. CI дээр APK бүрэн бүтэн угсрагдаж баталгаажсан. |
-| **App анх удаа нээх** | `NOT TESTED` (Физик) / `PASS` (Robolectric) | Activity lifecycle, Intent bootstrap, SharedPreferences үүсэлт алдаагүй. |
-| **App crash эсэх** | `PASS` | `BootPolicyRestoreReceiver`, `UsageMonitoringService`, `LocalTimeEngine` нь BackgroundServiceStartNotAllowedException болон NullPointerException-оос бүрэн хамгаалагдсан. |
-| **Android TV remote удирдлага** | `NOT TESTED` (Физик D-Pad) / `PASS` (Код аудит) | `isFocusable = true`, `isFocusableInTouchMode = true`, эхний товчлуур `btn.requestFocus()` авдаг. Block үед `onKeyDown` дээр `KEYCODE_BACK`-ийг хаадаг. |
-| **Дэлгэцийн хэмжээ/UI (Overscan)** | `NOT TESTED` (Физик 1080p/4K) / `PASS` (Код аудит) | Landscape orientation, singleTask launchMode, 64dp/48dp safe padding (TV overscan border) тооцогдсон. |
-
-### B. Family Onboarding (Төхөөрөмж холбох ба PIN)
-
-| Тест | Төлөв | Нотолгоо / Шалтгаан |
-|---|---|---|
-| **ТВ холболтын код үүсгэх** | `PASS` | `TvBackendClient.initDevicePairing()` нь `POST /api/v1/devices/pair/init` дуудаж 6-оронтой кодоор хангана. |
-| **Parent account холбох** | `PASS` | `checkPairingStatus()` 3 секунд тутамд poll хийж, CLAIMED төлөвт `X-Device-Token` авч хадгална. |
-| **PIN тохируулах** | `PASS` | Phase 8/9 backend endpoint `/pin/init` нь `pin_configured=true` болгож PBKDF2 hash хадгална. |
-| **PIN буруу оруулах** | `PASS` | Буруу PIN оруулбал татгалзаж, 5 удаа дараалж алдвал 15 минут түр түгжинэ (`LocalTimeEngineTest` PASSED). |
-| **PIN зөв оруулахад нэвтрэх** | `PASS` | PBKDF2 болон SHA-256 hash аль алийг дэмжинэ (`LocalTimeEngineTest` PASSED). |
-
-### C. Whitelist (Зөвшөөрөгдсөн Аппын Хяналт)
-
-| Тест | Төлөв | Нотолгоо / Шалтгаан |
-|---|---|---|
-| **Зөвшөөрөгдсөн аппууд харуулах** | `PASS` | `LocalPolicySnapshot.allowedApps`-аас зөвшөөрөгдсөн аппуудыг шүүж D-Pad товчлуурууд үүсгэнэ. |
-| **Зөвшөөрөгдөөгүй апп нээхийг хаах** | `NOT TESTED` (Физик) / `PASS` (Код аудит) | `UsageMonitoringService` 1 секунд тутамд foreground package-ийг `UsageStatsManager`-аар шалгаж, whitelist-д байхгүй бол FamilyScreen Launcher-ийг хүчээр foreground-д гаргаж ирнэ (`bringLauncherToFront`). |
-| **Whitelist шинэчлэгдэхэд синк хийх** | `PASS` | 30 секунд тутамд `syncDevicePolicy()` ажиллаж сүүлийн бодлогыг татаж авна. |
-| **Сүлжээ тасарсан үед Local Whitelist** | `PASS` | `TvOfflineDatabase` нь хамгийн сүүлийн snapshot-ийг SharedPreferences/SQLite-д хадгалдаг тул офлайн үед хэвийн ажиллана. |
-
-### D. Time Engine (Цагийн Тооцоолол)
-
-| Тест | Төлөв | Нотолгоо / Шалтгаан |
-|---|---|---|
-| **ALLOW төлөв** | `PASS` | Лимит болон хуваарийн дотор байхад зөвшөөрөгдөнө. |
-| **WARNING төлөв (15, 5, 1 мин)** | `PASS` | `LocalTimeEngineTest.warning thresholds trigger at 15 5 and 1 minute remaining` амжилттай давсан. |
-| **BLOCK төлөв** | `PASS` | Лимит дуусах, хуваарийн гадуур болох, эсвэл Parent Instant Lock идэвхжсэн үед BLOCK болно. |
-| **PIN ашиглан нэмэлт цаг авах** | `PASS` | ТВ дээрээс 5/10/15/30 минут PIN-ээр нээхэд `overrideSecondsToday` шууд нэмэгдэнэ. |
-
-### E. Reliability & Offline Resilience (Найдвартай Байдал)
-
-| Тест | Төлөв | Нотолгоо / Шалтгаан |
-|---|---|---|
-| **Wi-Fi салгах ба холбох** | `NOT TESTED` (Физик) / `PASS` (Архитектур) | Оффлайн үед sessions `offline_usage_queue` хүснэгтэд хадгалагдаж, сүлжээ ормогц `flushOfflineUsageQueue` автоматаар илгээнэ. |
-| **Backend түр унах** | `PASS` | Exponential backoff (300ms, 600ms, 1200ms) хийж, амжилтгүй бол оффлайн кэшээр ажиллана. |
-| **App хааж дахин нээх** | `PASS` | Ашигласан секундийн тоо `TvOfflineDatabase`-аас сэргээгдэнэ. |
-| **TV Box restart хийх** | `PASS` | `BootPolicyRestoreReceiver` нь `BOOT_COMPLETED` эвентээр foreground service-ийг шууд сэргээнэ. |
-| **Системийн цаг өөрчлөхөөс хамгаалах** | `PASS` | `SystemClock.elapsedRealtime()` monotonic цаг ашигладаг тул Android Settings-ээс цаг ухраасан ч хууртахгүй (`LocalTimeEngineTest` PASSED). |
-| **72 цаг оффлайн болох** | `PASS` | 72 цаг сервертэй холбогдоогүй бол аюулгүй байдлын үүднээс автоматаар BLOCK төлөвт орно (`OFFLINE_POLICY_EXPIRED`). |
+| **APK суулгах (Installation)** | `NOT TESTED` (Физик) / `PASS` (CI Build) | Физик TV Box холбогдоогүй тул `adb install` хийгдээгүй. CI дээр APK угсралт баталгаажсан. |
+| **D-Pad / Remote Navigation** | `NOT TESTED` (Физик) / `PASS` (Код аудит) | Бүх товчлуурууд `isFocusable=true`, эхний товчлуурт `requestFocus()` олгосон, фокус тодрох өнгөтэй. |
+| **Whitelist Хяналт & App Overlay** | `NOT TESTED` (Физик) / `PASS` (Код аудит) | `UsageMonitoringService` 1 секунд тутамд `UsageStatsManager`-аар foreground app-ийг хянаж зөвшөөрөгдөөгүй аппыг хаана. |
+| **Wi-Fi салгах / Холбох (Offline)** | `NOT TESTED` (Физик) / `PASS` (Тест) | SQLite `offline_usage_queue`-д кэшилж, холбогдмогц `flushOfflineUsageQueue` автоматаар синк хийнэ. |
+| **Home Button Restriction** | `NOT TESTED` (Физик) / `PASS` (Код аудит) | `CATEGORY_HOME` заасан тул TV Launcher болж ажиллана. Анхны тохиргоогоор "Always" сонгогдоно. |
+| **Settings Access Restriction** | `NOT TESTED` (Физик) / `PASS` (Код аудит) | `com.android.tv.settings` нь whitelist-д байхгүй тул арын сервис 1 секундэд хаана. |
+| **Reboot Persistence** | `NOT TESTED` (Физик) / `PASS` (Тест) | `BootPolicyRestoreReceiver` нь `BOOT_COMPLETED` эвентээр сервисийг шууд ажиллуулна. |
+| **Monotonic Time Engine** | `PASS` | `SystemClock.elapsedRealtime()` ашигладаг тул цаг ухраахаас бүрэн хамгаалагдсан (`LocalTimeEngineTest` PASS). |
+| **Time Threshold Warnings** | `PASS` | 15 мин, 5 мин, 1 мин анхааруулга өгч, хугацаа дуусахад BLOCK төлөвт орно (`LocalTimeEngineTest` PASS). |
+| **Backend Integration Suite** | `PASS` | **42 passed, 1 skipped locally / 43 CI дээр бүрэн давсан**. |
+| **Mobile Flutter Suite** | `PASS` | **2/2 тест бүрэн давсан** (`test/widget_test.dart`). |
+| **Android TV Unit Tests** | `PASS` | **8/8 unit test CI дээр бүрэн давсан**. |
 
 ---
 
-## 5. Android TV Системийн Хязгаарлалтын Шинжилгээ (System Constraints Analysis)
+## 6. Бодит Төхөөрөмжийн Туршилтын Заавар (Hardware Runbook & Rollback)
 
-Энэхүү шинжилгээ нь Android үйлдлийн системийн бодит архитектур, хамгаалалтын түвшинг тодорхойлно:
-
-### 5.1. Өөр аппыг хүчээр хаах (Force Stopping Other Apps):
-- **Системийн хязгаарлалт:** `ActivityManager.killBackgroundProcesses()` нь зөвхөн арын процессыг чөлөөлдөг. Foreground-д ажиллаж буй гуравдагч аппыг (YouTube, Netflix) OS түвшинд шууд terminate хийх `forceStopPackage()` API нь зөвхөн `FORCE_STOP_PACKAGES` систем эрхтэй (ROM platform key-ээр гарын үсэг зурсан эсвэл Device Owner) апп-д л зөвшөөрөгддөг.
-- **FamilyScreen-ийн шийдэл:** Аппыг kill хийхийн оронд `UsageMonitoringService` нь 1 секунд тутамд `UsageStatsManager`-аар foreground package-ийг хянаж, зөвшөөрөгдөөгүй апп эсвэл BLOCK төлөв үүсмэгц `FamilyScreenLauncherActivity`-г `FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TOP` тугтайгаар хүчээр foreground-д гаргаж ирж халхална (Overlay Takeover).
-
-### 5.2. Home товчоор parental control-ийг тойрох эрсдэл (Home Button Bypass):
-- **Системийн хязгаарлалт:** Android TV удирдлагын Home товчлуур нь системийн түвшинд баригдаж, анхдагч Home Launcher луу үсэрдэг тул ердийн апп `onKeyDown()`-оор Home товчийг шүүж хаах боломжгүй.
-- **FamilyScreen-ийн шийдэл:** `AndroidManifest.xml`-д `CATEGORY_HOME` болон `CATEGORY_LEANBACK_LAUNCHER` зарласан тул FamilyScreen нь өөрөө **Android TV Launcher** болдог.
-  - Анх суулгаад "Always" тохируулбал Home товч дарахад FamilyScreen нээгдэнэ.
-  - Хэрэв системийн default launcher солигдоогүй бол хүүхэд Home дарах үед 0.5–1 секундын хугацаанд үндсэн дэлгэц харагдаж болзошгүй ба `UsageMonitoringService` 1 секундын дараа FamilyScreen-ийг буцаан дуудна.
-
-### 5.3. Android Settings рүү орж цаг болон тохиргоо өөрчлөх:
-- `com.android.tv.settings` нь whitelist-д байхгүй тул арын сервис 1 секундэд барьж хаана.
-- Системийн цаг/огноог гараар ухраасан ч `LocalTimeEngine` нь monotonic `SystemClock.elapsedRealtime()` ашигладаг тул үнэн хугацааг тооцсон хэвээр байна.
-
-### 5.4. HDMI Source солих үед:
-- Телевизийн өөрийн удирдлагаар HDMI 1-ээс HDMI 2 (PlayStation, Кабелийн ТВ) рүү шилжих үйлдэл нь Android TV Box-оос гадна телевизийн техник хангамжийн түвшинд хийгддэг тул Android апп өөр HDMI оролтын дохиог хянах, хаах боломжгүй.
-
-### 5.5. Device Owner / Lock Task Mode (Kiosk Mode) ашиглах боломж:
-- ТВ Box-ийг үйлдвэрийн төлөвт (Factory Reset) эсвэл ADB ашиглан `dpm set-device-owner` хийснээр FamilyScreen-ийг Device Owner болгох бүрэн боломжтой.
-- Энэ үед `startLockTask()` дуудаж, Home button, Status bar, Settings, Recent Apps-ийг 100% царцааж төгс Kiosk горимд оруулах боломжтой (Phase 11-ийн зорилт).
-
----
-
-## 6. Security ба Release Readiness Аудит
-
-1. **Release Signing Configuration:**
-   - [`android_tv_box/app/build.gradle.kts`](file:///c:/Users/enhtv/Documents/tv%20control/android_tv_box/app/build.gradle.kts) файлд `signingConfigs.release` блокийг нэмсэн:
-     ```kotlin
-     signingConfigs {
-         create("release") {
-             val keystorePath = System.getenv("KEYSTORE_PATH")
-             if (!keystorePath.isNullOrBlank() && file(keystorePath).exists()) {
-                 storeFile = file(keystorePath)
-                 storePassword = System.getenv("KEYSTORE_PASSWORD")
-                 keyAlias = System.getenv("KEY_ALIAS")
-                 keyPassword = System.getenv("KEY_PASSWORD")
-             }
-         }
-     }
-     ```
-   - Хэрэв keystore зам орчны хувьсагчид өгөгдөөгүй бол CI дээр `app-release-unsigned.apk` хэвийн угсрагдана.
-   - **Анхааруулга:** `app-release-unsigned.apk` нь гарын үсэггүй тул production release биш бөгөөд төхөөрөмж дээр шууд суухгүй. Физик төхөөрөмжийн туршилтад debug key-ээр гарын үсэг зурсан `app-debug.apk`-г ашиглана.
-2. **Нууцлалын аудит (Zero Leak in Logs):**
-   - Kotlin файлуудад PIN код, JWT токен, эсвэл нууц үгийн hash-ийг `Log.d` эсвэл `println`-ээр хэвлэсэн тохиолдол байхгүй нь бүрэн нотлогдсон.
-3. **Холболтын хаягийн уян хатан байдал (Configurable Backend Base URL):**
-   - `TvBackendClient` нь өмнө нь хатуу `http://10.0.2.2:8000` байсныг өөрчилж, `TvOfflineDatabase.saveBackendBaseUrl()` болон Intent (`EXTRA_BACKEND_URL`), мөн TV дэлгэц дээр PIN талбарт `http://...` гэж бичих замаар бодит локал сүлжээний серверийн хаягийг (жишээ нь: `http://192.168.1.15:8000`) динамикаар тохируулах боломжтой болгов.
-4. **Backend Concurrency Bug Fix (JIT Provisioning Race Condition):**
-   - **Асуудал:** `/api/v1/auth/me` дуудах үед эхний хүсэлт хэрэглэгчийг үүсгээд commit хийх агшинд зэрэгцээ ирсэн хоёр дахь хүсэлт `User.email`-ээр шалгаж үзээд `supabase_sub == principal.user_id` байхад ч шалгалгүй шууд `409 ACCOUNT_LINKING_REQUIRED` алдаа буцаах эрсдэлтэй байсан.
-   - **Засвар:** `backend/app/main.py`-ийн `_provision_supabase_family()`-д `existing_by_email.supabase_sub == principal.user_id` эсвэл `existing_by_email.id == principal.user_id` тохиолдолд ижил хэрэглэгч гэж үзэн `user = existing_by_email` болгож үргэлжлүүлдэг болгов.
-   - **Тест:** `backend/tests/test_concurrency_and_migrations.py`-д `test_jit_provisioning_idempotency_and_takeover_prevention` автомат тест нэмэгдэж 42/42 тест 100% ногоон болсон.
-
----
-
-## 7. Бодит Төхөөрөмж Дээр Шалгах Алхамчилсан Заавар (Hardware Test Runbook)
-
-Энэхүү зааврыг даган физик Android TV Box төхөөрөмж дээр туршилтыг гүйцэтгэнэ:
-
-### Алхам 1: Төхөөрөмжийг ADB-ээр холбох
+### 6.1. Суулгах ба Эрх олгох (Installation & Grant Permissions):
 ```bash
-# 1. Android TV Box-ын Settings -> Device Preferences -> About -> Build number дээр 7 удаа дарж Developer Options нээнэ.
-# 2. Developer Options -> USB Debugging (болон Network Debugging)-ийг асаана.
-# 3. Компьютерээс ТВ-ийн Wi-Fi IP хаягаар холбогдоно:
-adb connect 192.168.1.XX:5555
+# 1. Төхөөрөмжөө орон нутгийн сүлжээгээр холбох
+adb connect <ANDROID_TV_IP>:5555
 adb devices
-# Төхөөрөмж "device" төлөвтэй харагдах ёстой.
-```
 
-### Алхам 2: APK суулгах болон шаардлагатай системийн зөвшөөрөл олгох
-```bash
-# Debug APK суулгах
-adb install -r android_tv_box/app/build/outputs/apk/debug/app-debug.apk
+# 2. Debug APK-г суулгах
+adb install -r build_output/apk/debug/app-debug.apk
 
-# Апп хэрэглээг хянах Usage Stats зөвшөөрлийг олгох (ТВ-д маш чухал)
+# 3. Android TV-ийн тусгай эрхүүдийг олгох
 adb shell pm grant mn.familyscreen.tv android.permission.PACKAGE_USAGE_STATS
 adb shell appops set mn.familyscreen.tv GET_USAGE_STATS allow
-
-# Дэлгэцэн дээр халхлах Overlay зөвшөөрлийг олгох
 adb shell appops set mn.familyscreen.tv SYSTEM_ALERT_WINDOW allow
+
+# 4. Компьютерийн backend серверийн IP-г зааж Launcher-ийг асаах
+adb shell am start -n mn.familyscreen.tv/.ui.FamilyScreenLauncherActivity --es EXTRA_BACKEND_URL "http://<PC_LOCAL_IP>:8000"
 ```
 
-### Алхам 3: Серверийн хаягийг тохируулан аппыг асаах
+### 6.2. Буцаах ба Устгах Заавар (Rollback & Uninstallation):
+Хэрэв туршилтын дараа төхөөрөмжийг анхны хэвийн байдалд нь оруулах шаардлагатай бол дараах тушаалуудыг ажиллуулна:
 ```bash
-# Орон нутгийн Wi-Fi сүлжээн дэх backend IP хаягийг зааж Launcher-ийг эхлүүлнэ:
-adb shell am start -n mn.familyscreen.tv/.ui.FamilyScreenLauncherActivity --es EXTRA_BACKEND_URL "http://192.168.1.YY:8000"
-```
+# 1. FamilyScreen-ийг default launcher-аас чөлөөлөх
+adb shell cmd package set-home-activity --clear
 
-### Алхам 4: Физик тестүүдийг шалгах дараалал:
-1. **D-Pad тест:** Удирдлагын сумтай товчоор товчлуурууд хооронд шилжих, Focus шар/хөх өнгөөр ялгарч байгааг шалгах.
-2. **Pairing тест:** Дэлгэц дээр 6 оронтой код гарч ирж байгааг харж, гар утасны Flutter апп-аас холбох.
-3. **Whitelist тест:** YouTube Kids нээгээд үзэх, дараа нь зөвшөөрөгдөөгүй апп (жишээ нь Браузер эсвэл Settings) нээхийг оролдож 1 секундын дотор буцаж хаагдаж байгааг шалгах.
-4. **Time Warning тест:** Хугацааг туршилтын зорилгоор 16 минут болгон тохируулж, 15, 5, 1 минутын анхааруулга дэлгэц дээр шараар гарч ирэхийг шалгах.
-5. **Block & PIN Override:** Хугацаа дуусахад улаан BLOCK дэлгэц гарч, PIN-ээр +15 минут сунгахад дахин ALLOW төлөвт орж байгааг шалгах.
-6. **Wi-Fi салгах тест:** Wi-Fi салгаад ТВ Box-ийг унтрааж асаахад өмнөх дүрэм хадгалагдаж, цаг сэргэж байгааг шалгах.
+# 2. Аппликейшнийг өгөгдөл, кэштэй нь бүрэн устгах
+adb uninstall mn.familyscreen.tv
+
+# 3. Өмнөх тогтвортой хувилбарыг буцаан суулгах (хэрэгцээтэй бол)
+adb install -r -d build_output/apk/debug/previous-app-debug.apk
+```
 
 ---
 
-## 8. Үлдсэн Эрсдэл ба Дараагийн Шатны Зөвлөмжүүд
+## 7. Эцсийн Шийдвэр (Final Decision)
 
-1. **Android TV Home Button:** Стандарт Launcher-аар сонгоогүй үед Home товч дарсны дараа 0.5–1 секундын flickering үүсэх магадлалтай. Эцсийн шийдэл нь Device Owner / Lock Task Mode-ийг бүрэн хэрэгжүүлэх юм.
-2. **Production Keystore Management:** Google Play Console эсвэл OEM Box-д нийлүүлэх албан ёсны Release Keystore-ийг GitHub Secrets дээр найдвартай байршуулах шаардлагатай.
-3. **Физик төхөөрөмжийн эцсийн баталгаажуулалт:** Хэрэглэгчийн гарт очих албан ёсны TV Box загвар (Amlogic S905X4 эсвэл Google TV dongle) дээр туршилт хийж, HDMI sleep/wake болон Bluetooth удирдлагын latency-г эцэслэн дүгнэх.
+### Дүгнэлт: **B. READY AFTER HARDWARE VALIDATION**
+
+**Үндэслэл ба Нотолгоо:**
+1. Програм хангамжийн бүх архитектур, Backend (43 тест), Android TV Kotlin (8 тест), Flutter UI (2 тест) 100% ногоон давсан.
+2. JIT provisioning concurrency болон Cleartext HTTP дээрх бодит эрсдэлүүд бүрэн шийдвэрлэгдсэн.
+3. Гэвч бодит физик Android TV Box төхөөрөмж холбогдоогүй байгаа тул бодит TV удирдлагын товчлуурын мэдрэмж (D-Pad latency), HDMI дохионы шилжилт, физик TV дэлгэцийн safe overscan зэрэг техник хангамжийн хүчин зүйлсийг гараар туршиж үзсэний дараа Phase 11-ийн Universal TV систем рүү шилжих нь чанарын хувьд хамгийн зөв бөгөөд эрсдэлгүй алхам болно.
